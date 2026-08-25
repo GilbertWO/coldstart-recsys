@@ -1,0 +1,56 @@
+# ==== Data & model artifacts (DO NOT COMMIT) ====
+# Kaggle competition data has redistribution restrictions — never commit raw data
+data/
+*.csv
+*.parquet
+!data/.gitkeep
+models/
+*.pkl
+*.joblib
+*.h5
+*.pt
+
+# ==== Python ====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ==== Java / Spring Boot (Maven) ====
+target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# ==== Java / Spring Boot (Gradle) ====
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# ==== React / Node ====
+node_modules/
+dist/
+build/
+.vite/
+*.local
+
+# ==== Environment / secrets ====
+.env
+.env.local
+.env.*.local
+application-local.properties
+application-secrets.yml
+
+# ==== IDE ====
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# ==== Logs ====
+*.log
+logs/
