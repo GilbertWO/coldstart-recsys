@@ -167,7 +167,7 @@ def clean_articles(df: pd.DataFrame) -> pd.DataFrame:
     # (detail_desc, prod_name, product_code, detail_desc) aren't modeling
     # features -- drop them here so every downstream consumer of this parquet
     # gets the same, already-decided column set instead of re-deciding it.
-    drop_cols = [c for c in ("detail_desc", "prod_name") if c in df.columns]
+    drop_cols = [c for c in ("detail_desc", "prod_name", "product_code") if c in df.columns]
     if drop_cols:
         df = df.drop(columns=drop_cols)
     return df
