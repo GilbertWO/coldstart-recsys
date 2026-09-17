@@ -71,6 +71,34 @@ def build_recommendations(customer_ids, top_k_items: list) -> pd.DataFrame:
         "recommendations": [top_k_items] * len(customer_ids),
     })
 
+def precision_recall_at_k(recommendations: pd.DataFrame, val: pd.DataFrame, k: int = 12):
+    """Mean precision@k and recall@k over customers with at least one
+    actual purchase in val. `recommendations` must have customer_id and
+    a recommendations column (list of article_id); `val` is the ground
+    truth held-out week from prepare_data.py.
+    """
+    actual = val.groupby("customer_id")["article_id"].apply(set)
+
+    precisions, recalls = [], []
+    for _, row in recommendations.iterrows():
+        true_items = actual.get(row["customer_id"], set())
+        if not true_items:
+            continue
+        hits = len(set(row["recommendations"][:k]) & true_items)
+        precisions.append(hits / k)
+        recalls.append(hits / len(true_items))
+
+    return sum(precisions) / len(precisions), sum(recalls) / len(recalls)
+
+def hit_rate_at_k(recommendations: pd.DataFrame, val: pd.DataFrame, k: int = 12) -> float:
+    """Fraction of customers with at least one relevant item in their top-k."""
+    actual = val.groupby("customer_id")["article_id"].apply(set)
+    hits = sum(
+        bool(set(row["recommendations"][:k]) & actual.get(row["customer_id"], set()))
+        for _, row in recommendations.iterrows()
+    )
+    return hits / len(recommendations)
+
 
 if __name__ == "__main__":
     log.info("Loading train split...")
@@ -93,3 +121,11 @@ if __name__ == "__main__":
     recs = build_recommendations(val_customers, top12)
     log.info("Built recommendations frame: %d rows", len(recs))
     print(recs.head())
+
+    log.info("Computing precision@12 / recall@12 against val...")
+    precision, recall = precision_recall_at_k(recs, val)
+    log.info("Popularity baseline -- precision@12: %.5f, recall@12: %.5f", precision, recall)
+
+    hit_rate = hit_rate_at_k(recs, val)
+    log.info("Popularity baseline -- hit_rate@12: %.5f (%.2f%% of customers got >=1 hit)",
+              hit_rate, hit_rate * 100)
