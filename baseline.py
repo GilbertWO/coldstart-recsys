@@ -26,8 +26,11 @@ Usage:
 
 import logging
 from pathlib import Path
-
+import numpy as np
+import scipy.sparse as sp
 import pandas as pd
+
+N_CANDIDATE_ITEMS = 5000
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -99,7 +102,68 @@ def hit_rate_at_k(recommendations: pd.DataFrame, val: pd.DataFrame, k: int = 12)
     )
     return hits / len(recommendations)
 
+def build_interaction_matrix(train: pd.DataFrame, popularity: pd.Series, n_candidates: int = N_CANDIDATE_ITEMS):
+    """Binary customer-article interaction matrix, train only, restricted to the
+    top n_candidates most popular articles. Binary presence, not purchase count --
+    see baseline.py module docstring for why.
+    """
+    candidate_items = popularity.head(n_candidates).index
+    train_restricted = train[train["article_id"].isin(candidate_items)]
 
+    customers = train_restricted["customer_id"].unique()
+    customer_to_row = {c: i for i, c in enumerate(customers)}
+    item_to_col = {a: i for i, a in enumerate(candidate_items)}
+
+    rows = train_restricted["customer_id"].map(customer_to_row)
+    cols = train_restricted["article_id"].map(item_to_col)
+    data = np.ones(len(train_restricted), dtype=np.int8)
+
+    matrix = sp.csr_matrix((data, (rows, cols)), shape=(len(customers), n_candidates))
+    matrix.data[:] = 1  # collapse duplicate (customer, article) entries to binary presence
+
+    return matrix, customer_to_row, item_to_col
+
+def compute_item_similarity(matrix: sp.csr_matrix) -> sp.csr_matrix:
+    """Cosine similarity between items, via L2-normalized sparse item vectors --
+    never materializes a dense item x item matrix. Output is n_candidates x
+    n_candidates (5000x5000 here).
+    """
+    item_vectors = matrix.T.tocsr()  # items x customers
+
+    norms = np.sqrt(item_vectors.multiply(item_vectors).sum(axis=1))
+    norms = np.asarray(norms).flatten()
+    norms[norms == 0] = 1  # avoid divide-by-zero for items with no interactions
+    inv_norms = sp.diags(1 / norms)
+    item_vectors_normalized = inv_norms @ item_vectors
+
+    similarity = item_vectors_normalized @ item_vectors_normalized.T
+    return similarity.tocsr()
+
+def get_item_item_recommendations(val_customers, matrix, similarity, customer_to_row, item_to_col, popularity_top12, k=12):
+    """Per-customer item-item CF recommendations, falling back to the
+    popularity baseline for any customer with no row in the interaction
+    matrix -- including true cold-start customers with zero train purchases.
+    This fallback is the cold-start handling this project is built around,
+    not a patch for a missing case.
+    """
+    col_to_item = {v: item for item, v in item_to_col.items()}
+    recommendations = {}
+
+    for customer_id in val_customers:
+        row_idx = customer_to_row.get(customer_id)
+        if row_idx is None:
+            recommendations[customer_id] = popularity_top12
+            continue
+
+        customer_row = matrix[row_idx]
+        scores = np.asarray((customer_row @ similarity).todense()).flatten()
+        scores[customer_row.indices] = -np.inf  # exclude already-purchased items
+
+        top_k_cols = np.argpartition(scores, -k)[-k:]
+        top_k_cols = top_k_cols[np.argsort(-scores[top_k_cols])]
+        recommendations[customer_id] = [col_to_item[c] for c in top_k_cols]
+
+    return recommendations
 if __name__ == "__main__":
     log.info("Loading train split...")
     train = load_train()
@@ -129,3 +193,23 @@ if __name__ == "__main__":
     hit_rate = hit_rate_at_k(recs, val)
     log.info("Popularity baseline -- hit_rate@12: %.5f (%.2f%% of customers got >=1 hit)",
               hit_rate, hit_rate * 100)
+
+    log.info("Building customer-article interaction matrix (top %d items)...", N_CANDIDATE_ITEMS)
+    matrix, customer_to_row, item_to_col = build_interaction_matrix(train, popularity)
+    log.info("Interaction matrix shape: %s, nonzero entries: %d", matrix.shape, matrix.nnz)
+
+    log.info("Computing item-item cosine similarity...")
+    similarity = compute_item_similarity(matrix)
+    log.info("Similarity matrix shape: %s, nonzero entries: %d", similarity.shape, similarity.nnz)
+
+    log.info("Generating item-item CF recommendations for val customers...")
+    item_item_recs_dict = get_item_item_recommendations(val_customers, matrix, similarity, customer_to_row, item_to_col, top12)
+    item_item_recs = pd.DataFrame({
+        "customer_id": list(item_item_recs_dict.keys()),
+        "recommendations": list(item_item_recs_dict.values()),
+    })
+    log.info("Built item-item recommendations frame: %d rows", len(item_item_recs))
+
+    fallback_count = sum(1 for c in val_customers if c not in customer_to_row)
+    log.info("%d / %d val customers (%.2f%%) fell back to popularity (no row in interaction matrix)",
+              fallback_count, len(val_customers), 100 * fallback_count / len(val_customers))
