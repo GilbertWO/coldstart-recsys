@@ -5,9 +5,9 @@ Two baselines, per portfolio-project-plan.pdf:
   1. Popularity-based recommender — the floor. Same top-12 list for every
      customer, deliberately NOT personalized. This is the comparison point
      a real model has to beat, so it stays intentionally naive.
-  2. Item-item collaborative filtering — added later this week. Personalized
-     via co-purchase patterns. That's where per-user history belongs, not
-     in the popularity baseline above.
+  2. Item-item collaborative filtering — personalized via co-purchase
+     patterns. That's where per-user history belongs, not in the
+     popularity baseline above.
 
 DESIGN DECISION — no already-purchased filtering in the popularity baseline:
     Filtering a user's own past purchases out of their recommendation list
@@ -74,6 +74,7 @@ def build_recommendations(customer_ids, top_k_items: list) -> pd.DataFrame:
         "recommendations": [top_k_items] * len(customer_ids),
     })
 
+
 def precision_recall_at_k(recommendations: pd.DataFrame, val: pd.DataFrame, k: int = 12):
     """Mean precision@k and recall@k over customers with at least one
     actual purchase in val. `recommendations` must have customer_id and
@@ -93,6 +94,7 @@ def precision_recall_at_k(recommendations: pd.DataFrame, val: pd.DataFrame, k: i
 
     return sum(precisions) / len(precisions), sum(recalls) / len(recalls)
 
+
 def hit_rate_at_k(recommendations: pd.DataFrame, val: pd.DataFrame, k: int = 12) -> float:
     """Fraction of customers with at least one relevant item in their top-k."""
     actual = val.groupby("customer_id")["article_id"].apply(set)
@@ -101,6 +103,34 @@ def hit_rate_at_k(recommendations: pd.DataFrame, val: pd.DataFrame, k: int = 12)
         for _, row in recommendations.iterrows()
     )
     return hits / len(recommendations)
+
+
+def average_precision_at_k(recommended: list, relevant: set, k: int = 12) -> float:
+    """Average precision@k for one customer's ranked recommendation list.
+    Kaggle-style: divides by min(len(relevant), k), not len(relevant).
+    """
+    if not relevant:
+        return 0.0
+    hits = 0
+    sum_precisions = 0.0
+    for i, item in enumerate(recommended[:k], start=1):
+        if item in relevant:
+            hits += 1
+            sum_precisions += hits / i
+    return sum_precisions / min(len(relevant), k)
+
+
+def map_at_k(recommendations: pd.DataFrame, val: pd.DataFrame, k: int = 12) -> float:
+    """Mean average precision@k over customers with at least one val purchase."""
+    actual = val.groupby("customer_id")["article_id"].apply(set)
+    scores = []
+    for _, row in recommendations.iterrows():
+        true_items = actual.get(row["customer_id"], set())
+        if not true_items:
+            continue
+        scores.append(average_precision_at_k(row["recommendations"], true_items, k))
+    return sum(scores) / len(scores)
+
 
 def build_interaction_matrix(train: pd.DataFrame, popularity: pd.Series, n_candidates: int = N_CANDIDATE_ITEMS):
     """Binary customer-article interaction matrix, train only, restricted to the
@@ -123,6 +153,7 @@ def build_interaction_matrix(train: pd.DataFrame, popularity: pd.Series, n_candi
 
     return matrix, customer_to_row, item_to_col
 
+
 def compute_item_similarity(matrix: sp.csr_matrix) -> sp.csr_matrix:
     """Cosine similarity between items, via L2-normalized sparse item vectors --
     never materializes a dense item x item matrix. Output is n_candidates x
@@ -138,6 +169,7 @@ def compute_item_similarity(matrix: sp.csr_matrix) -> sp.csr_matrix:
 
     similarity = item_vectors_normalized @ item_vectors_normalized.T
     return similarity.tocsr()
+
 
 def get_item_item_recommendations(val_customers, matrix, similarity, customer_to_row, item_to_col, popularity_top12, k=12):
     """Per-customer item-item CF recommendations, falling back to the
@@ -164,6 +196,22 @@ def get_item_item_recommendations(val_customers, matrix, similarity, customer_to
         recommendations[customer_id] = [col_to_item[c] for c in top_k_cols]
 
     return recommendations
+
+def compute_recent_popularity(train: pd.DataFrame, window_days: int = 14, date_col: str = "t_dat") -> pd.Series:
+    """Article purchase counts restricted to the last `window_days` days of
+    train, ending at train's own max date. This is the recency-aware
+    alternative to compute_popularity's full-window count -- same
+    LEAK WARNING applies: computed from train only.
+
+    DESIGN DECISION -- still not personalized: this stays a single global
+    top-k list for every customer, same as compute_popularity. The only
+    difference is the purchase-count window. Personalization belongs to
+    item-item CF; mixing it in here would blur the three-way comparison.
+    """
+    cutoff = train[date_col].max() - pd.Timedelta(days=window_days)
+    recent = train[train[date_col] >= cutoff]
+    return recent["article_id"].value_counts()
+
 if __name__ == "__main__":
     log.info("Loading train split...")
     train = load_train()
@@ -194,6 +242,9 @@ if __name__ == "__main__":
     log.info("Popularity baseline -- hit_rate@12: %.5f (%.2f%% of customers got >=1 hit)",
               hit_rate, hit_rate * 100)
 
+    map12 = map_at_k(recs, val)
+    log.info("Popularity baseline -- MAP@12: %.5f", map12)
+
     log.info("Building customer-article interaction matrix (top %d items)...", N_CANDIDATE_ITEMS)
     matrix, customer_to_row, item_to_col = build_interaction_matrix(train, popularity)
     log.info("Interaction matrix shape: %s, nonzero entries: %d", matrix.shape, matrix.nnz)
@@ -210,6 +261,37 @@ if __name__ == "__main__":
     })
     log.info("Built item-item recommendations frame: %d rows", len(item_item_recs))
 
+    log.info("Computing precision@12 / recall@12 / hit_rate@12 for item-item CF...")
+    ii_precision, ii_recall = precision_recall_at_k(item_item_recs, val)
+    ii_hit_rate = hit_rate_at_k(item_item_recs, val)
+    log.info("Item-item CF -- precision@12: %.5f, recall@12: %.5f, hit_rate@12: %.5f (%.2f%%)",
+              ii_precision, ii_recall, ii_hit_rate, ii_hit_rate * 100)
+
+    ii_map12 = map_at_k(item_item_recs, val)
+    log.info("Item-item CF -- MAP@12: %.5f", ii_map12)
+
+    log.info("Computing recent popularity (last 14 days of train)...")
+    recent_popularity = compute_recent_popularity(train, window_days=14)
+    recent_top12 = get_popularity_recommendations(recent_popularity)
+    log.info("Recent-popularity top-12 article_ids: %s", recent_top12)
+
+    log.info("Recent-popularity top-12 article_ids: %s", recent_top12)
+    overlap = [a in item_to_col for a in recent_top12]
+    log.info("%d / %d recent top-12 items are in the item-item candidate pool", sum(overlap), len(recent_top12))
+
+    recent_recs = build_recommendations(val_customers, recent_top12)
+    rp_precision, rp_recall = precision_recall_at_k(recent_recs, val)
+    rp_hit_rate = hit_rate_at_k(recent_recs, val)
+    rp_map12 = map_at_k(recent_recs, val)
+    log.info("Recent-popularity baseline -- precision@12: %.5f, recall@12: %.5f, hit_rate@12: %.5f (%.2f%%), MAP@12: %.5f",
+              rp_precision, rp_recall, rp_hit_rate, rp_hit_rate * 100, rp_map12)
+
     fallback_count = sum(1 for c in val_customers if c not in customer_to_row)
+    train_customers = set(train["customer_id"].unique())
+    zero_history = sum(1 for c in val_customers if c not in train_customers)
+    outside_candidates = fallback_count - zero_history
+    log.info("Fallback breakdown -- zero train history: %d (%.2f%%), history outside top-%d candidates: %d (%.2f%%)",
+              zero_history, 100 * zero_history / len(val_customers),
+              N_CANDIDATE_ITEMS, outside_candidates, 100 * outside_candidates / len(val_customers))
     log.info("%d / %d val customers (%.2f%%) fell back to popularity (no row in interaction matrix)",
               fallback_count, len(val_customers), 100 * fallback_count / len(val_customers))
