@@ -34,7 +34,7 @@ LEAK WARNING beyond row-splitting (the plan text doesn't call this out,
 but it's the second most common way this kind of project silently leaks):
     Any feature computed from full-history stats (item popularity, a
     customer's total purchase count, repeat-purchase rate, etc.) MUST be
-    computed using only data available as of that row's split cutoff —
+    computed using only data available as of that row's split cutoff --
     never from the full dataset. This script does not compute modeling
     features (that's Week 4+), but if/when you build a feature step on
     top of these parquet files, recompute popularity/aggregate features
@@ -59,6 +59,8 @@ log = logging.getLogger(__name__)
 N_TEST_WEEKS = 1   # most recent full week(s) -> test
 N_VAL_WEEKS = 1     # full week(s) immediately before test -> val
 # --------------------------------------------------------------------------
+
+RAW_TRANSACTION_ROW_COUNT = 31_788_324  # transactions_train.csv, before any cleaning
 
 
 def load_transactions(data_dir: Path) -> pd.DataFrame:
@@ -173,6 +175,70 @@ def clean_articles(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def build_customer_id_lookup(customers: pd.DataFrame) -> pd.DataFrame:
+    """Builds the single, global customer_id -> customer_idx mapping used by
+    every output file below (transactions splits and customers_clean).
+
+    DESIGN DECISION -- built once, from customers_clean, never per-split:
+    if train and val each built their own integer mapping independently,
+    the same real customer could get two different integer ids in the two
+    files. That wouldn't error, and it wouldn't show up in a row-count
+    check -- it would just silently corrupt every train/val join
+    downstream. Building this mapping exactly once, before the
+    transactions data is split, makes that bug impossible by construction
+    rather than something to catch after the fact.
+
+    DESIGN DECISION -- source is customers_clean, not transactions: the
+    customers table is the authoritative registry of every customer_id
+    that can legally appear anywhere in this dataset, including the
+    9,699 zero-purchase customers who show up in customers.csv but never
+    in transactions_train.csv. Building the lookup from transactions
+    instead would silently exclude any customer with no purchases -- and
+    those are exactly the true-cold-start customers this project cares
+    about most.
+
+    DESIGN DECISION -- sorted before enumerating: raw CSV row order isn't
+    guaranteed stable across re-downloads or pandas versions. Sorting
+    customer_id before assigning integers makes the mapping reproducible
+    from scratch, not merely reproducible as long as nobody re-reads the
+    CSV in a different row order.
+    """
+    unique_ids = pd.Series(sorted(customers["customer_id"].astype(str).unique()))
+    return pd.DataFrame({
+        "customer_id": unique_ids,
+        "customer_idx": range(len(unique_ids)),
+    })
+
+
+def apply_customer_idx(df: pd.DataFrame, lookup: pd.DataFrame, id_col: str = "customer_id") -> pd.DataFrame:
+    """Joins customer_idx onto df via the global lookup, keeping the
+    original customer_id column alongside it -- additive, not destructive,
+    so every existing script that reads these parquet files by customer_id
+    (baseline.py included) keeps working unmodified.
+
+    Fails loudly rather than silently dropping rows: a customer_id present
+    in df but absent from the lookup would otherwise map to NaN and get
+    filtered out somewhere downstream with no error message at all -- the
+    worst kind of bug, a wrong number instead of a crash.
+    """
+    id_map = dict(zip(lookup["customer_id"], lookup["customer_idx"]))
+    idx = df[id_col].astype(str).map(id_map)
+
+    unmapped = int(idx.isna().sum())
+    if unmapped:
+        missing_examples = df.loc[idx.isna(), id_col].astype(str).unique()[:5]
+        raise ValueError(
+            f"{unmapped} rows have a {id_col} not present in the customer lookup "
+            f"(e.g. {list(missing_examples)}). The lookup must be built from a "
+            f"customer_id set that's a superset of every id in this dataframe -- "
+            f"fix build_customer_id_lookup's source, don't just drop these rows."
+        )
+
+    df = df.copy()
+    df["customer_idx"] = idx.astype("int32")
+    return df
+
+
 def temporal_split(df: pd.DataFrame, n_val_weeks: int, n_test_weeks: int):
     """Global date-based split. See module docstring for why global, not per-customer."""
     max_date = df["t_dat"].max()
@@ -217,8 +283,34 @@ def main():
     customers = clean_customers(customers)
     articles = clean_articles(articles)
 
+    log.info("Building global customer_id -> customer_idx lookup...")
+    customer_lookup = build_customer_id_lookup(customers)
+    log.info("Lookup covers %d unique customers", len(customer_lookup))
+
+    customers = apply_customer_idx(customers, customer_lookup)
+    transactions = apply_customer_idx(transactions, customer_lookup)
+
     log.info("Splitting transactions by time (global date cutoff)...")
     train, val, test = temporal_split(transactions, args.val_weeks, args.test_weeks)
+
+    split_total = len(train) + len(val) + len(test)
+    if split_total != len(transactions):
+        raise ValueError(
+            f"train+val+test rows ({split_total}) != cleaned transaction rows "
+            f"({len(transactions)}) -- the split or the customer_idx join dropped "
+            f"or duplicated rows somewhere. Do not write output files until this "
+            f"is fixed."
+        )
+    dropped_in_cleaning = RAW_TRANSACTION_ROW_COUNT - len(transactions)
+    log.info(
+        "Row-count check passed: train+val+test = %d rows, matching cleaned "
+        "transactions exactly. Raw transactions_train.csv had %d rows before "
+        "cleaning; cleaning dropped %d of those (missing fields / non-positive "
+        "price -- see the cleaning breakdown log above). This check is against "
+        "the post-cleaning count, not the raw file, since cleaning is expected "
+        "to remove a small number of rows on purpose.",
+        split_total, RAW_TRANSACTION_ROW_COUNT, dropped_in_cleaning,
+    )
 
     log.info("Writing parquet outputs to %s ...", args.out_dir)
     train.to_parquet(args.out_dir / "transactions_train_split.parquet", index=False)
@@ -226,6 +318,7 @@ def main():
     test.to_parquet(args.out_dir / "transactions_test.parquet", index=False)
     customers.to_parquet(args.out_dir / "customers_clean.parquet", index=False)
     articles.to_parquet(args.out_dir / "articles_clean.parquet", index=False)
+    customer_lookup.to_parquet(args.out_dir / "customer_id_lookup.parquet", index=False)
 
     log.info("Done.")
 
