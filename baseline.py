@@ -15,6 +15,13 @@ DESIGN DECISION — no already-purchased filtering in the popularity baseline:
     baseline into a hybrid, which weakens the two-point comparison the
     write-up depends on ("non-personalized floor" vs. "personalized via
     co-purchase patterns"). That comparison logic belongs to item-item CF.
+    Confirmed empirically, not just argued narratively: the exclusion
+    ablation (get_popularity_recommendations_excl, see __main__) shows
+    adding this filter would have cost popularity 26-37% relative score
+    across precision/recall/hit_rate/MAP@12 anyway -- likely because
+    repurchase (restocking a basic, buying another colorway) is common
+    enough in this catalog that "already bought" is a positive signal,
+    not noise.
 
 LEAK WARNING (same as prepare_data.py): popularity is computed from the
 train split only. Val and test exist to be evaluated against, not learned
@@ -171,12 +178,27 @@ def compute_item_similarity(matrix: sp.csr_matrix) -> sp.csr_matrix:
     return similarity.tocsr()
 
 
-def get_item_item_recommendations(val_customers, matrix, similarity, customer_to_row, item_to_col, popularity_top12, k=12):
+def get_item_item_recommendations(val_customers, matrix, similarity, customer_to_row, item_to_col,
+                                   popularity_top12, k=12, exclude_purchased=True):
     """Per-customer item-item CF recommendations, falling back to the
     popularity baseline for any customer with no row in the interaction
     matrix -- including true cold-start customers with zero train purchases.
     This fallback is the cold-start handling this project is built around,
     not a patch for a missing case.
+
+    exclude_purchased -- when True (the reported baseline), already-bought
+    items are excluded from a customer's own recommendations. Set False only
+    for the exclusion ablation; see get_popularity_recommendations_excl for
+    the popularity-side counterpart.
+
+    DESIGN DECISION -- kept True as the reported default despite scoring
+    worse: the exclusion ablation showed MAP@12 drops from 0.00839 to
+    0.00478 (-43% relative) with exclusion on, most likely because this is
+    fast-fashion and a real share of next week's purchases are repeats of
+    what a customer already owns. Recommending mostly repurchases is a
+    weaker demonstration of co-purchase personalization for this project's
+    case study than recommending genuinely new items, even at a lower
+    score -- see README's exclusion ablation section for the full number.
     """
     col_to_item = {v: item for item, v in item_to_col.items()}
     recommendations = {}
@@ -189,13 +211,15 @@ def get_item_item_recommendations(val_customers, matrix, similarity, customer_to
 
         customer_row = matrix[row_idx]
         scores = np.asarray((customer_row @ similarity).todense()).flatten()
-        scores[customer_row.indices] = -np.inf  # exclude already-purchased items
+        if exclude_purchased:
+            scores[customer_row.indices] = -np.inf  # exclude already-purchased items
 
         top_k_cols = np.argpartition(scores, -k)[-k:]
         top_k_cols = top_k_cols[np.argsort(-scores[top_k_cols])]
         recommendations[customer_id] = [col_to_item[c] for c in top_k_cols]
 
     return recommendations
+
 
 def compute_recent_popularity(train: pd.DataFrame, window_days: int = 14, date_col: str = "t_dat") -> pd.Series:
     """Article purchase counts restricted to the last `window_days` days of
@@ -211,6 +235,92 @@ def compute_recent_popularity(train: pd.DataFrame, window_days: int = 14, date_c
     cutoff = train[date_col].max() - pd.Timedelta(days=window_days)
     recent = train[train[date_col] >= cutoff]
     return recent["article_id"].value_counts()
+
+
+def get_popularity_recommendations_excl(popularity, matrix, customer_to_row, item_to_col,
+                                         val_customers, k=12, pool_size=200):
+    """Ablation variant of get_popularity_recommendations: per-customer,
+    excludes items already bought in train. NOT the reported baseline --
+    see module docstring for why exclusion stays out of the floor baseline
+    by default. This function exists only to measure the effect of adding
+    exclusion, for the write-up.
+
+    DESIGN DECISION -- pool_size=200, not the full catalog: a customer
+    would need to have bought more than 200 of the globally most popular
+    articles for this to run short of k=12 after filtering, which doesn't
+    happen in practice at this dataset's purchase-count scale. Capping
+    the pool avoids ranking and filtering the full ~105k-article
+    popularity list per customer for no accuracy benefit.
+
+    Result this produced (see README exclusion ablation): removing
+    exclusion lifted popularity's MAP@12 from 0.00252 to 0.00344, a 37%
+    relative gain -- this function is what made that comparison possible.
+    """
+    ranked_pool = popularity.head(pool_size).index.tolist()
+    ranked_pool_cols = [item_to_col[item] for item in ranked_pool]
+
+    recommendations = {}
+    for customer_id in val_customers:
+        row_idx = customer_to_row.get(customer_id)
+        if row_idx is None:
+            recommendations[customer_id] = ranked_pool[:k]
+            continue
+        bought_cols = set(matrix[row_idx].indices)
+        filtered = [item for item, col in zip(ranked_pool, ranked_pool_cols) if col not in bought_cols]
+        recommendations[customer_id] = filtered[:k]
+
+    return recommendations
+
+
+def build_customer_purchase_counts(train: pd.DataFrame) -> pd.Series:
+    """Train-only row count per customer -- the basis for cold-start
+    segmentation below. Same leak boundary as popularity: train only, so
+    a customer's segment can't be influenced by what they buy in val.
+    Deliberately row count, not distinct-article count: a customer who
+    bought the same basic 5 times has a different purchase pattern than
+    one who bought 5 different things, and this segmentation is about
+    purchase *frequency* (how much history the model has to work with),
+    not catalog breadth.
+    """
+    return train.groupby("customer_id").size()
+
+
+def segment_customers(customer_ids, purchase_counts: pd.Series) -> dict:
+    """Buckets customer_ids into 0 / 1-2 / 3+ train purchases.
+
+    DESIGN DECISION -- these three bands, not quartiles or a continuous
+    score: 0 purchases is true cold start (necessarily falls back to
+    popularity, see get_item_item_recommendations); 1-2 is "just enough
+    history to have a preference signal, not enough to be reliable"; 3+
+    is everyone else. The bands aren't arbitrary post-hoc buckets -- they
+    were picked because they're the exact groups the plan's cold-start
+    policy has to treat differently, so the eval boundary matches the
+    policy boundary.
+    """
+    segments = {"0": [], "1-2": [], "3+": []}
+    for cid in customer_ids:
+        count = purchase_counts.get(cid, 0)
+        if count == 0:
+            segments["0"].append(cid)
+        elif count <= 2:
+            segments["1-2"].append(cid)
+        else:
+            segments["3+"].append(cid)
+    return segments
+
+
+def evaluate_segment(recommendations_df: pd.DataFrame, val: pd.DataFrame, segment_ids: list, k=12):
+    """Precision/recall/hit_rate/MAP@12 restricted to one customer segment.
+    Returns None if the segment has no customers in this recommendations frame.
+    """
+    subset = recommendations_df[recommendations_df["customer_id"].isin(segment_ids)]
+    if len(subset) == 0:
+        return None
+    precision, recall = precision_recall_at_k(subset, val, k)
+    hit_rate = hit_rate_at_k(subset, val, k)
+    map12 = map_at_k(subset, val, k)
+    return precision, recall, hit_rate, map12
+
 
 if __name__ == "__main__":
     log.info("Loading train split...")
@@ -270,10 +380,53 @@ if __name__ == "__main__":
     ii_map12 = map_at_k(item_item_recs, val)
     log.info("Item-item CF -- MAP@12: %.5f", ii_map12)
 
+    # --- Exclusion ablation ---
+    log.info("Running exclusion ablation: popularity and item-item CF, with vs without excluding already-bought items...")
+
+    pop_excl_dict = get_popularity_recommendations_excl(popularity, matrix, customer_to_row, item_to_col, val_customers)
+    pop_excl_recs = pd.DataFrame({
+        "customer_id": list(pop_excl_dict.keys()),
+        "recommendations": list(pop_excl_dict.values()),
+    })
+    pe_precision, pe_recall = precision_recall_at_k(pop_excl_recs, val)
+    pe_hit_rate = hit_rate_at_k(pop_excl_recs, val)
+    pe_map12 = map_at_k(pop_excl_recs, val)
+    log.info("Popularity WITH exclusion -- precision@12: %.5f, recall@12: %.5f, hit_rate@12: %.5f, MAP@12: %.5f",
+              pe_precision, pe_recall, pe_hit_rate, pe_map12)
+    log.info("Popularity WITHOUT exclusion (reported baseline) -- precision@12: %.5f, recall@12: %.5f, hit_rate@12: %.5f, MAP@12: %.5f",
+              precision, recall, hit_rate, map12)
+
+    ii_noexcl_dict = get_item_item_recommendations(val_customers, matrix, similarity, customer_to_row, item_to_col, top12, exclude_purchased=False)
+    ii_noexcl_recs = pd.DataFrame({
+        "customer_id": list(ii_noexcl_dict.keys()),
+        "recommendations": list(ii_noexcl_dict.values()),
+    })
+    iin_precision, iin_recall = precision_recall_at_k(ii_noexcl_recs, val)
+    iin_hit_rate = hit_rate_at_k(ii_noexcl_recs, val)
+    iin_map12 = map_at_k(ii_noexcl_recs, val)
+    log.info("Item-item CF WITHOUT exclusion -- precision@12: %.5f, recall@12: %.5f, hit_rate@12: %.5f, MAP@12: %.5f",
+              iin_precision, iin_recall, iin_hit_rate, iin_map12)
+    log.info("Item-item CF WITH exclusion (reported baseline) -- precision@12: %.5f, recall@12: %.5f, hit_rate@12: %.5f, MAP@12: %.5f",
+              ii_precision, ii_recall, ii_hit_rate, ii_map12)
+
+    # --- Cold-start segment breakdown ---
+    log.info("Segmenting val customers by train purchase count (0 / 1-2 / 3+)...")
+    purchase_counts = build_customer_purchase_counts(train)
+    segments = segment_customers(val_customers, purchase_counts)
+    for seg_name, seg_ids in segments.items():
+        log.info("Segment %s: %d customers", seg_name, len(seg_ids))
+
+    for seg_name, seg_ids in segments.items():
+        pop_result = evaluate_segment(recs, val, seg_ids)
+        ii_result = evaluate_segment(item_item_recs, val, seg_ids)
+        if pop_result:
+            log.info("Segment %s -- Popularity: precision %.5f, recall %.5f, hit_rate %.5f, MAP@12 %.5f", seg_name, *pop_result)
+        if ii_result:
+            log.info("Segment %s -- Item-item CF: precision %.5f, recall %.5f, hit_rate %.5f, MAP@12 %.5f", seg_name, *ii_result)
+
     log.info("Computing recent popularity (last 14 days of train)...")
     recent_popularity = compute_recent_popularity(train, window_days=14)
     recent_top12 = get_popularity_recommendations(recent_popularity)
-    log.info("Recent-popularity top-12 article_ids: %s", recent_top12)
 
     log.info("Recent-popularity top-12 article_ids: %s", recent_top12)
     overlap = [a in item_to_col for a in recent_top12]
@@ -285,6 +438,22 @@ if __name__ == "__main__":
     rp_map12 = map_at_k(recent_recs, val)
     log.info("Recent-popularity baseline -- precision@12: %.5f, recall@12: %.5f, hit_rate@12: %.5f (%.2f%%), MAP@12: %.5f",
               rp_precision, rp_recall, rp_hit_rate, rp_hit_rate * 100, rp_map12)
+
+    log.info("Computing recent popularity (last 7 days of train)...")
+    recent_popularity_7d = compute_recent_popularity(train, window_days=7)
+    recent_top12_7d = get_popularity_recommendations(recent_popularity_7d)
+    log.info("Recent-popularity (7d) top-12 article_ids: %s", recent_top12_7d)
+
+    recent_recs_7d = build_recommendations(val_customers, recent_top12_7d)
+    rp7_precision, rp7_recall = precision_recall_at_k(recent_recs_7d, val)
+    rp7_hit_rate = hit_rate_at_k(recent_recs_7d, val)
+    rp7_map12 = map_at_k(recent_recs_7d, val)
+    log.info("Recent-popularity (7d) -- precision@12: %.5f, recall@12: %.5f, hit_rate@12: %.5f (%.2f%%), MAP@12: %.5f",
+              rp7_precision, rp7_recall, rp7_hit_rate, rp7_hit_rate * 100, rp7_map12)
+
+    chosen_window = 7 if rp7_map12 > rp_map12 else 14
+    log.info("Chosen recent-popularity window: %d days (MAP@12 -- 14d: %.5f, 7d: %.5f)",
+              chosen_window, rp_map12, rp7_map12)
 
     fallback_count = sum(1 for c in val_customers if c not in customer_to_row)
     train_customers = set(train["customer_id"].unique())
