@@ -1,5 +1,5 @@
 # coldstart-recsys
-Recommendation engine (ALS + learning-to-rank) trained on real e-commerce transactions, served via Spring Boot + Redis, with explicit cold-start handling for new users.
+Recommendation engine (ALS-based collaborative filtering, with a LightGBM re-ranking stage identified as the natural next step) trained on real e-commerce transactions, served via Spring Boot + Redis, with explicit cold-start handling for new users.
 
 ## Dataset
 [H&M Personalized Fashion Recommendations](https://www.kaggle.com/competitions/h-and-m-personalized-fashion-recommendations) — 1,371,980 registered customers, 31,788,324 transactions in `transactions_train.csv`.
