@@ -60,3 +60,7 @@ application-secrets.yml
 # ==== Logs ====
 *.log
 logs/
+
+Claude outputs/
+week-03-04-pipeline-baseline-plan.md
+implicit_spike.py
