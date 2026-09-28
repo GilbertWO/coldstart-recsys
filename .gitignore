@@ -1,8 +1,9 @@
 # ==== Personal planning docs (not for public repo) ====
 SCHEDULE-REVISED.md
 portfolio-project-plan.pdf
-week-00-react-prework-plan.md
-week-01-02-data-exploration-plan.md
+week-*-plan.md
+implicit_spike.py
+Claude outputs/
 
 # ==== Data & model artifacts (DO NOT COMMIT) ====
 # Kaggle competition data has redistribution restrictions -- never commit raw data
@@ -61,6 +62,4 @@ application-secrets.yml
 *.log
 logs/
 
-Claude outputs/
-week-03-04-pipeline-baseline-plan.md
-implicit_spike.py
+
