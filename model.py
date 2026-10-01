@@ -17,6 +17,7 @@ Usage:
 import numpy as np
 import scipy.sparse as sp
 import threadpoolctl
+import pandas as pd
 from implicit.als import AlternatingLeastSquares
 
 import baseline as base
@@ -86,6 +87,42 @@ def build_full_interaction_matrix(train):
     matrix.data[:] = 1  # collapse duplicate (customer, article) entries to binary presence
     return matrix, customer_to_row, item_to_col
 
+def get_als_recommendations(val_customers, model, matrix, customer_to_row, item_to_col,
+                             popularity_top12, k=12, exclude_purchased=True):
+    """Per-customer ALS recommendations, falling back to the popularity
+    baseline for any customer with no row in the interaction matrix --
+    same cold-start fallback get_item_item_recommendations uses in
+    baseline.py, since a trained ALS model has the identical structural
+    gap: a customer with zero train interactions has no learned embedding
+    to recommend from.
+
+    exclude_purchased -- mirrors get_item_item_recommendations's own
+    parameter and reported-default choice (True), via implicit's own
+    filter_already_liked_items, for consistency with the rest of this
+    repo's baselines.
+    """
+    col_to_item = {v: item for item, v in item_to_col.items()}
+    recommendations = {}
+
+    known_customers = [c for c in val_customers if c in customer_to_row]
+    known_rows = np.array([customer_to_row[c] for c in known_customers])
+
+    if len(known_rows) > 0:
+        ids, _scores = model.recommend(
+            known_rows,
+            matrix[known_rows],
+            N=k,
+            filter_already_liked_items=exclude_purchased,
+        )
+        for customer_id, item_cols in zip(known_customers, ids):
+            recommendations[customer_id] = [col_to_item[c] for c in item_cols]
+
+    for customer_id in val_customers:
+        if customer_id not in customer_to_row:
+            recommendations[customer_id] = popularity_top12
+
+    return recommendations
+
 if __name__ == "__main__":
     train = base.load_train()
     matrix, customer_to_row, item_to_col = build_full_interaction_matrix(train)
@@ -97,3 +134,22 @@ if __name__ == "__main__":
     print("item_factors shape:", model.item_factors.shape)
     print("any all-zero user vectors:", (np.abs(model.user_factors).sum(axis=1) == 0).sum())
     print("any all-zero item vectors:", (np.abs(model.item_factors).sum(axis=1) == 0).sum())
+
+    val = base.load_val()
+    val_customers = val["customer_id"].unique()
+    popularity = base.compute_popularity(train)
+    popularity_top12 = base.get_popularity_recommendations(popularity)
+
+    als_recs_dict = get_als_recommendations(
+        val_customers, model, matrix, customer_to_row, item_to_col, popularity_top12
+    )
+    als_recs = pd.DataFrame({
+        "customer_id": list(als_recs_dict.keys()),
+        "recommendations": list(als_recs_dict.values()),
+    })
+
+    precision, recall = base.precision_recall_at_k(als_recs, val)
+    hit_rate = base.hit_rate_at_k(als_recs, val)
+    map12 = base.map_at_k(als_recs, val)
+    print(f"ALS -- precision@12: {precision:.5f}, recall@12: {recall:.5f}, "
+          f"hit_rate@12: {hit_rate:.5f}, MAP@12: {map12:.5f}")
