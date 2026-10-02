@@ -123,6 +123,36 @@ def get_als_recommendations(val_customers, model, matrix, customer_to_row, item_
 
     return recommendations
 
+def build_confidence_weighted_matrix(train):
+    """Customer-article interaction matrix, train only, full catalog --
+    identical to build_full_interaction_matrix EXCEPT data is left as
+    summed purchase counts instead of collapsed to binary presence.
+
+    DESIGN DECISION -- this is the confidence-weighting test from the
+    Oct 1 session notes: implicit's fit() internally computes
+    Cui = alpha * <matrix data> (confirmed in implicit/cpu/als.py), so
+    whatever values this matrix carries ARE the confidence signal ALS
+    optimizes against. The binary collapse in build_full_interaction_matrix
+    was throwing away exactly the repurchase signal the exclusion ablation
+    already proved matters in this catalog. This is the controlled
+    comparison -- same customers, same articles, same hyperparameters as
+    the binary run; the only variable that changes is whether a repeat
+    purchase counts for more than a single purchase.
+    """
+    customers = train["customer_id"].unique()
+    articles = train["article_id"].unique()
+    customer_to_row = {c: i for i, c in enumerate(customers)}
+    item_to_col = {a: i for i, a in enumerate(articles)}
+
+    rows = train["customer_id"].map(customer_to_row).to_numpy(dtype=np.int32)
+    cols = train["article_id"].map(item_to_col).to_numpy(dtype=np.int32)
+    data = np.ones(len(train), dtype=np.float32)
+
+    matrix = sp.csr_matrix((data, (rows, cols)), shape=(len(customers), len(articles)))
+    # No binary collapse here -- duplicate (customer, article) entries SUM
+    # during construction, giving raw purchase counts as confidence.
+    return matrix, customer_to_row, item_to_col
+
 if __name__ == "__main__":
     train = base.load_train()
     matrix, customer_to_row, item_to_col = build_full_interaction_matrix(train)
@@ -153,3 +183,21 @@ if __name__ == "__main__":
     map12 = base.map_at_k(als_recs, val)
     print(f"ALS -- precision@12: {precision:.5f}, recall@12: {recall:.5f}, "
           f"hit_rate@12: {hit_rate:.5f}, MAP@12: {map12:.5f}")
+
+    print("Testing confidence weighting: raw purchase counts instead of binary presence...")
+    cw_matrix, cw_customer_to_row, cw_item_to_col = build_confidence_weighted_matrix(train)
+    cw_model = fit_als_model(cw_matrix)
+
+    cw_recs_dict = get_als_recommendations(
+        val_customers, cw_model, cw_matrix, cw_customer_to_row, cw_item_to_col, popularity_top12
+    )
+    cw_recs = pd.DataFrame({
+        "customer_id": list(cw_recs_dict.keys()),
+        "recommendations": list(cw_recs_dict.values()),
+    })
+    cw_precision, cw_recall = base.precision_recall_at_k(cw_recs, val)
+    cw_hit_rate = base.hit_rate_at_k(cw_recs, val)
+    cw_map12 = base.map_at_k(cw_recs, val)
+    print(f"ALS (confidence-weighted) -- precision@12: {cw_precision:.5f}, "
+          f"recall@12: {cw_recall:.5f}, hit_rate@12: {cw_hit_rate:.5f}, MAP@12: {cw_map12:.5f}")
+    print(f"ALS (binary, for comparison) -- MAP@12: {map12:.5f}")
