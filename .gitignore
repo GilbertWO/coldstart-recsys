@@ -64,3 +64,4 @@ application-secrets.yml
 logs/
 
 
+backtest_fold_*.json
