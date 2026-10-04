@@ -12,6 +12,7 @@ data/
 *.parquet
 !data/.gitkeep
 models/
+*.npz
 *.pkl
 *.joblib
 *.h5
