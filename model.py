@@ -10,8 +10,22 @@ computation, so it's built against the full catalog directly.
 LEAK WARNING (same as baseline.py / prepare_data.py): the interaction matrix
 is computed from the train split only.
 
+HOW THIS FILE FITS THE REST OF THE PIPELINE (added Oct 5):
+    * The five-configuration sweep in __main__ below is the ORIGINAL, coarse,
+      single-validation-week pass (Oct 3). It is kept because the README's
+      confidence-weighting table comes from it. It ranks configs by MAP@12,
+      the project's headline metric.
+    * The configuration used everywhere else (FROZEN_ALS_CONFIG below) was chosen
+      from that pass plus a convergence check (convergence_check.py: 40 iterations).
+      als_sweep.py later varied one knob at a time on three earlier weeks and found
+      no variant that beat it by the pre-specified margin, so it stands.
+    * Multi-week comparisons live in rolling_backtest.py; the one-time test-week
+      evaluation lives in test_evaluation.py, which imports fit_als_model and the
+      matrix builders from here.
+
 Usage:
-    python model.py
+    python model.py                # the original five-config sweep (~25 min)
+    python model.py --best-only    # fit only FROZEN_ALS_CONFIG and score it (~10 min)
 """
 
 import numpy as np
@@ -32,6 +46,13 @@ import cold_start_policy as csp
 # wins the other three metrics, so 7 is chosen -- picked from segment 0's own
 # numbers only, not from how the window scored on segments 1-2 / 3+.
 COLD_START_WINDOW_DAYS = 7
+
+# The configuration the rest of the project uses (test_evaluation.py and
+# rolling_backtest.py keep their own copies so a later edit here can't silently
+# change a reported result). Chosen on validation MAP@12 + the convergence check;
+# not significantly beaten by any one-knob variant over three further weeks
+# (als_sweep.py).
+FROZEN_ALS_CONFIG = {"factors": 150, "regularization": 0.1, "alpha": 15.0, "iterations": 40}
 
 
 def fit_als_model(matrix, factors=100, regularization=0.01, alpha=1.0, iterations=15, random_state=42):
@@ -219,8 +240,8 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--best-only", action="store_true",
-                        help="fit only the best config from Oct 3's sweep (factors=50, alpha=15) "
-                             "instead of all five -- ~4 min instead of ~25")
+                        help="fit only FROZEN_ALS_CONFIG (factors=150, reg=0.1, alpha=15, 40 iterations) "
+                             "instead of all five sweep configs")
     args = parser.parse_args()
 
     # Cold-start fallback list: last COLD_START_WINDOW_DAYS days of train only.
@@ -250,7 +271,7 @@ if __name__ == "__main__":
         {"factors": 150, "regularization": 0.1, "alpha": 15.0, "iterations": 20},
     ]
     if args.best_only:
-        SWEEP_CONFIGS = [{"factors": 50, "regularization": 0.01, "alpha": 15.0, "iterations": 15}]
+        SWEEP_CONFIGS = [dict(FROZEN_ALS_CONFIG)]
 
     results = []
     for cfg in SWEEP_CONFIGS:
@@ -286,11 +307,14 @@ if __name__ == "__main__":
     # does confidence-weighted ALS actually move the needle on segment "0"
     # (true cold start), or is popularity's fallback still doing all the work
     # there -- same question the Week 5-6 plan asks, answered honestly either
-    # way. "Best" = highest precision@12 among the configs just swept; this
-    # is picking among configs already run above, not a second model search.
-    best = max(results, key=lambda r: r["precision@12"])
+    # way. "Best" = highest MAP@12 (the headline metric) among the configs just
+    # swept; this is picking among configs already run above, not a second model
+    # search. CORRECTION (Oct 5): this used to rank by precision@12, which picks a
+    # different config (factors=50) than MAP@12 does (factors=150, reg=0.1) -- the
+    # mismatch was found on Oct 4 and fixed here.
+    best = max(results, key=lambda r: r["map@12"])
     best_cfg = {k: v for k, v in best.items() if k not in ("precision@12", "recall@12", "hit_rate@12", "map@12", "_recs")}
-    log.info("Best config by precision@12: %s", best_cfg)
+    log.info("Best config by MAP@12: %s", best_cfg)
 
     segments = base.segment_customers(train, val_customers)
     log.info("Segment sizes: %s", segments.value_counts().to_dict())
