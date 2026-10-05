@@ -54,7 +54,7 @@ Given that, the honest call would be to report the *unexcluded* numbers, since t
 
 `baseline.py` also runs a non-personalized recency heuristic (most-purchased articles in just the last 7 days of train, no exclusion, no per-customer logic at all) as a side experiment. It scores MAP@12 = 0.00677 — higher than the reported item-item CF number above (0.00478), on every metric, in aggregate over all val customers. That's worth stating plainly rather than leaving it for a reviewer to find by rerunning the script.
 
-It isn't a fair fight as stated: the recency heuristic was never run through the exclusion filter, and item-item CF *without* exclusion scores 0.00839 — comfortably ahead of it. So on equal terms (neither excluding repurchases), personalization does earn its keep over a recency-only signal. But the specific number this README reports for item-item CF, chosen for the exclusion-tradeoff reasoning above, is not the equal-terms number — and it does lose to a heuristic with no personalization in it at all. **Update (Oct 4):** the equal-terms comparison has now been run, per segment and with exclusion applied to the recency list; see "Model comparison" below. With exclusion on, the recency list beats both personalized models in the weeks near the end of the data and loses badly in earlier weeks; see the rolling backtest.
+It isn't a fair fight as stated: the recency heuristic was never run through the exclusion filter, and item-item CF *without* exclusion scores 0.00839 — comfortably ahead of it. So on equal terms (neither excluding repurchases), personalization does earn its keep over a recency-only signal. But the specific number this README reports for item-item CF, chosen for the exclusion-tradeoff reasoning above, is not the equal-terms number — and it does lose to a heuristic with no personalization in it at all. **Update (Oct 4):** the equal-terms comparison has now been run, per segment and with exclusion applied to the recency list; see "Model comparison" below. With exclusion on, a 7-day recency list beats both personalized models in four of five backtest weeks and fails in one (a week of complete best-seller turnover); see the rolling backtest.
 
 ### Cold-start segment breakdown: personalization value is concentrated in the "a little data" band
 
@@ -85,6 +85,19 @@ What moved validation MAP@12 (exclusion on, all-time fallback, factors=100 unles
 Counts alone gave about +7%; scaling confidence with alpha=15 gave most of the rest, and alpha peaks near 15. The five configurations tried are a coarse manual pass, not an ablation (the last one changed factors, regularization and iterations together). Configuration was ranked on MAP@12, the headline metric. An earlier ranking on precision@12 picked a different configuration; that was a selection error and was corrected.
 
 Convergence: with factors=150 / reg=0.1 / alpha=15, 99.0% of the training-loss decline over 40 iterations was done by iteration 20, but validation MAP@12 (exclusion on) still rose 1.6% from 20 to 40 iterations (0.004995 to 0.005076). The frozen configuration therefore uses **factors=150, reg=0.1, alpha=15, 40 iterations**. Validation tables below that were produced before the convergence check use 20 iterations and say so.
+
+Sensitivity to the other hyperparameters: because that first pass was coarse and on one week, `als_sweep.py` varies one knob at a time around the frozen configuration and scores each variant on three earlier weeks (targets starting 2020-09-02, 08-26 and 08-19; validation and test weeks not used), under both exclusion settings. The rule for calling a variant a candidate was fixed beforehand: at least +3% mean MAP@12 in both settings and no significantly worse week. Mean MAP@12 change vs the frozen configuration over those three weeks:
+
+| Variant | Exclusion on | Exclusion off |
+|---|---|---|
+| alpha 8 | -0.6% | +3.2% |
+| alpha 25 | -2.0% | -4.6% |
+| regularization 0.03 | +0.1% | -0.0% |
+| regularization 0.3 | -0.1% | +0.0% |
+| factors 100 | +1.5% | -2.2% |
+| factors 200 | -1.0% | +1.6% |
+
+No variant met the rule, so the frozen configuration stands. With exclusion on every variant is within about 2% of it; without exclusion alpha is the only knob with a consistent effect (alpha 8 is slightly better, +4%, +4% and +2% across the three weeks; alpha 25 is clearly worse), and regularization has essentially no effect. Gains of this size are close to what a refit with a different random seed could produce (fits here use a single fixed seed, so seed-to-seed variation was not measured, and the per-week intervals only cover customer-sampling noise). This is a sensitivity analysis, not a re-tuning: the test result was produced beforehand with the frozen configuration. Item-item CF was not tuned at all, so the tuning asymmetry noted below remains.
 
 ## Cold-start policy for zero-history customers
 
@@ -171,15 +184,33 @@ Absolute MAP@12 with exclusion on, by week (08-12, 08-19, 08-26, 09-02, test): A
 - **Without exclusion, ALS leads item-item on hit rate in all five weeks** (+2.8% to +11.7%, every interval excludes zero) and on MAP@12 in three of five (+7.5% to +15.0%, significant), never significantly behind. Mean MAP gap +6.3%.
 - **With exclusion on, item-item reaches more customers than ALS in all five weeks** (hit rate 4.3% to 7.9% higher, every interval excludes zero; -9.7% for ALS on the validation week as well). The same holds in the 3+ purchase segment alone (ALS -4.3% to -8.0%), so it is not an artifact of item-item's fallback on light-history customers.
 - **With exclusion on, ALS vs item-item on MAP@12 is a small, week-dependent edge for ALS** (mean +3.6%, significant in two of five weeks, never significantly negative; validation was -1.9% with an interval spanning zero). Treat it as a tie leaning toward ALS, not a result.
-- **Without exclusion, both personalized models beat the recency list on MAP@12 in all five weeks**, by 15% to 212%.
+- **Without exclusion, both personalized models beat the 14-day recency list on MAP@12 in all five weeks**, by 15% to 212%. That comparison turned out to depend heavily on the recency window; against a 7-day list the lead is much smaller (next section).
 
-### What did not hold: the recency list is regime-dependent
+### The recency window matters, and so does the week
 
-An earlier version of this README, based on the validation and test weeks only, said the non-personalized recency list carries most of the predictive power. The backtest contradicts that as a general statement.
+The 14-day recency list used in the tables above turned out to be a weak version of the baseline. In the week starting 2020-08-19 it overlapped only 1 of that week's 12 best-selling articles (all-customer MAP@12 0.0028), while the 7-day list overlapped 4 of 12 and scored 0.0079 on the same customers. The 7-day window is also the cold-start window and the definition the original baseline used. Which window to call "the" recency baseline was not fixed before seeing results, so both are reported; the 7-day list is treated as the primary baseline because it is the stronger one, and models should be judged against the strongest simple baseline. `recency_window_recheck.py` re-scores it from the saved per-customer scores (it first verifies that its customer alignment reproduces the saved 14-day numbers exactly).
 
-- With exclusion on, the 14-day recency list beat both ALS and item-item on MAP@12 in the three most recent weeks (08-26, 09-02, test; by 9% to 30%) and on validation, but **lost to both by 60% to 95% in the two earliest weeks** (08-12, 08-19), where its hit rate also fell below the personalized models'. Without exclusion the same flip appears on hit rate (recency ahead by 14-19% in the last two weeks, behind by 58% in the first two).
-- [Likely] The recency list's quality depends on the calendar: something about late-August assortment or demand made the last two weeks of purchases a poor guide to the next week, and that stopped being true from late August onward. The data here cannot say what. The personalized models, which draw on a customer's whole history, did not show that swing.
-- The practical reading: the personalized models are the robust choice; recency is a strong signal when the calendar cooperates and a weak one when it does not. Both the 7-day cold-start fallback and the 14-day recency baseline were selected on a week from the favorable regime.
+Absolute recency MAP@12 by week (08-12, 08-19, 08-26, 09-02, test), all customers: exclusion off, 14-day 0.003285, 0.002777, 0.006466, 0.006304, 0.007104 and 7-day 0.003174, 0.007867, 0.006828, 0.006732, 0.008748; exclusion on, 14-day 0.002939, 0.002587, 0.006002, 0.005688, 0.006702 and 7-day 0.002907, 0.007630, 0.006399, 0.006308, 0.008353.
+
+Models vs the 7-day recency list, aggregate (08-12, 08-19, 08-26, 09-02, test; `*` = that week's interval excludes zero):
+
+| Exclusion | Metric | Comparison | 08-12 | 08-19 | 08-26 | 09-02 | test |
+|---|---|---|---|---|---|---|---|
+| on | MAP@12 | ALS vs recency 7d | +62.0* | -34.0* | -19.4* | -18.1* | -40.2* |
+| on | MAP@12 | item-item vs recency 7d | +61.1* | -33.8* | -25.4* | -20.9* | -43.7* |
+| on | hit_rate@12 | ALS vs recency 7d | +26.4* | -33.5* | -31.4* | -39.8* | -45.8* |
+| on | hit_rate@12 | item-item vs recency 7d | +35.2* | -27.8* | -28.3* | -35.2* | -42.7* |
+| off | MAP@12 | ALS vs recency 7d | +156.0* | +10.2* | +39.3* | +41.4* | +0.6 |
+| off | MAP@12 | item-item vs recency 7d | +162.2* | +7.6 | +21.1* | +29.5* | -6.4 |
+| off | hit_rate@12 | ALS vs recency 7d | +79.2* | -5.4* | -5.8* | -15.4* | -23.2* |
+| off | hit_rate@12 | item-item vs recency 7d | +74.3* | -10.6* | -15.6* | -21.0* | -27.6* |
+
+What this shows:
+
+- **With exclusion on, the 7-day recency list beats both personalized models on MAP@12 and on hit rate in four of five weeks**, by 18% to 46% (every interval excludes zero). It loses in one week, 08-12, by about 60% on MAP.
+- **08-12 is a genuine failure for every window.** The 7-day and 14-day lists overlapped none of that week's 12 best sellers and covered about 1% of purchases, the same as an all-time list; best sellers had turned over. The personalized models, which draw on each customer's whole history, were not affected. A window that spans a turnover goes stale, which is also what happened to the 14-day list in the 08-19 week.
+- **Without exclusion, ALS leads the 7-day list on MAP@12 in four of five weeks (+10% to +156%), but the lead is zero on the test week (+0.6%, not significant)**, and item-item is behind it on the test week (-6.4%, significant in the 3+ segment). The 7-day list has the higher hit rate in four of five weeks (ALS -5% to -23%).
+- [Likely] The 7-day list's MAP rose across these weeks (0.0032, 0.0079, 0.0068, 0.0067, 0.0087 without exclusion) while the personalized models stayed roughly flat (ALS 0.0081 to 0.0095), so recency has been gaining on the models toward the end of the data. The cause is not known.
 
 ### Caveats
 
@@ -188,8 +219,9 @@ An earlier version of this README, based on the validation and test weeks only, 
 - Item-item CF is restricted to its top 5,000 candidate articles. On the test week roughly 7,700 of 68,984 customers (about 5,570 true cold-start plus about 2,100 with history but no purchases in that set) fall back to popularity for this reason, while ALS uses the full catalog. In every backtest week 45-48% of the 1-2 purchase customers fall back, versus under 2% of the 3+ customers.
 - The 1-2 purchase segment is small (about 2,000 customers per week), so its intervals are wide and few differences there are distinguishable from noise.
 - The "keep exclusion on" framing from the baseline section is a modeling-goals choice, not a metrics-driven one, and the exclusion setting changes which model looks best.
+- The recency window (7 vs 14 days) changed several conclusions, and the choice of which to treat as primary was made after seeing results. It was resolved in the conservative direction (the stronger baseline), but other windows (for example a 10-day list) were not explored, and segment 0 has only about 5,000 customers a week, so the cold-start window comparison cannot separate 7 from 14 or 28 days reliably (all-time popularity is clearly worse in every week).
 
-Takeaway as measured: the personalized models are stable across weeks (MAP@12 about 0.0047-0.0052 with exclusion on, about 0.0081-0.0095 without), ALS has a reliable hit-rate and MAP edge over item-item when repeat purchases are allowed, item-item reaches more customers when they are excluded, and the non-personalized recency list can beat or badly lose to either depending on the week. The natural next experiment is a blend of recency and model scores, which is also the plan for the LightGBM re-ranking stage, because the two kinds of signal fail in different weeks. Any such experiment needs development on validation and the earlier folds, and evaluation on weeks not yet used, because the test week has now been used.
+Takeaway as measured: a 7-day popularity list is a strong baseline on this dataset. With already-bought items excluded it beats ALS and item-item CF on both MAP@12 and hit rate in four of five weeks, and it fails only in a week when best sellers turned over completely. The personalized models are steady week to week (MAP@12 about 0.0047-0.0052 with exclusion on, 0.0081-0.0095 without) and their clearest value is MAP when repeat purchases are allowed (ALS beats item-item in that setting and beats the 7-day list in four of five weeks), a lead that was zero on the test week. So the honest statement is not "personalization beats the baselines", it is that personalization adds ranking quality in specific conditions and that a recency signal and the personalized models fail in different weeks. That is the argument for a blend of recency and model scores, which is also the plan for the LightGBM re-ranking stage. Any such experiment needs development on validation and the earlier folds, and evaluation on weeks not yet used, because the test week has now been used.
 
 ## Model artifact
 
@@ -209,6 +241,9 @@ Run from the repo root with the processed data in `data/processed/` (output of `
 | `python bootstrap_comparison.py` | paired-bootstrap intervals, validation week |
 | `python convergence_check.py` | training-loss curve and 40-iteration validation check |
 | `python test_evaluation.py` | the one-time test-week evaluation; also writes `models/` |
+| `python als_sweep.py` | one-knob-at-a-time ALS sensitivity sweep over three earlier weeks (about 1.5 hours; resumable) |
 | `python rolling_backtest.py` | weekly backtest over four earlier weeks plus the cached test week (about 1 hour; resumable) |
+| `python fallback_diagnostic.py` | popularity-window comparison by week, with overlap against each week's best sellers |
+| `python recency_window_recheck.py` | re-scores the recency baseline with a 7-day window from the cached backtest scores |
 
 Several scripts reproduce a prior table as a self-check and print CHECK PASSED or CHECK FAILED; a failed check means the pipeline differs from the one that produced the reported numbers.
