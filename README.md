@@ -6,7 +6,7 @@ Recommendation engine (ALS-based collaborative filtering, with a LightGBM re-ran
 
 ## Status
 
-Done: EDA, baselines (popularity, item-item CF), ALS core model with confidence weighting and a cold-start fallback policy, a matched three-way model comparison on a validation week and a test week with paired-bootstrap intervals. Also done: a rolling backtest over four earlier weeks. Not started: LightGBM re-ranking, Spring Boot + Redis serving.
+Done: EDA, baselines (popularity, item-item CF), ALS core model with confidence weighting and a cold-start fallback policy, a matched three-way model comparison on a validation week and a test week with paired-bootstrap intervals. Also done: a rolling backtest over four earlier weeks. Also done: the serving data layer, with precomputed top-12 lists for every customer in the saved model, loaded into a local PostgreSQL alongside a Redis container (see Serving layer below). Not started: the Spring Boot endpoint, the Redis cache layer, and LightGBM re-ranking.
 
 ## EDA Findings
 
@@ -231,7 +231,36 @@ The evaluation also argues for the ranker as the next step rather than more ALS 
 
 ## Model artifact
 
-`test_evaluation.py` saves the trained ALS model (user and item factors, row/column id order, the cold-start fallback list, and the config) to `models/`. It is trained on train+val and is gitignored because the factor matrices for every customer are large; the serving stage will regenerate or fetch it.
+`test_evaluation.py` saves the trained ALS model (user and item factors, row/column id order, the cold-start fallback list, and the config) to `models/`. It is trained on train+val and is gitignored because the factor matrices for every customer are large; the serving layer does not load it at request time, because `export_recommendations.py` reads it once to precompute every customer's recommendation lists (next section).
+
+## Serving layer (in progress)
+
+The API will not score customers at request time. The saved factors are an 885 MB NumPy file that a Spring Boot service cannot read, and scoring 105,542 articles per request would buy nothing, so `export_recommendations.py` scores every customer in the artifact once and writes two top-12 lists per customer. The service will look them up by primary key in PostgreSQL, with Redis in front as a cache. The design and its open decisions are in [`serving-design-draft.md`](serving-design-draft.md).
+
+**Two modes.** `repurchase` (the default) allows articles the customer already bought; `discover` removes them. The default follows the evaluation. Against the 7-day popularity list, ALS leads on MAP@12 in all five evaluation weeks when already-bought items are allowed (significant in four; +0.6% and not significant on the test week), but its hit rate@12 is lower than the popularity list's in four of the five weeks. With already-bought items removed, ALS trails the popularity list on both metrics in four of five weeks, so `discover` stays available but is not the default, and its documentation says so. No model in this project beats the 7-day popularity list on both metrics in either mode.
+
+**Cold start is part of the response contract.** A known customer gets their precomputed list. A well-formed id that is not in the table gets HTTP 200 with the 7-day popularity list and `source: fallback_popularity_7d`. A malformed id gets 400. A new user never gets a 404 or 500. About 15,300 registered customers (no purchases before the history ended on 2020-09-15) have no embedding and take the fallback path. About 1,660 articles with no purchases in the history window can never be recommended; that is item cold start and is not addressed here.
+
+**What exists and has been verified (October 8-9, 2026).**
+
+| Item | Result |
+|---|---|
+| Precomputed lists | 1,356,709 customers x 2 modes = 2,713,418 rows in about 21 minutes. The script's checks passed: 12 distinct articles per list, no already-bought article in any `discover` list, and 100% agreement with an independent recomputation on 300 sampled customers |
+| PostgreSQL load | the 2,713,418 rows load with `COPY` in about 53 seconds; per-mode counts match the export |
+| Primary-key lookup | about 0.13 ms execution time for one lookup (a single EXPLAIN ANALYZE, warm cache). This is database time only, not endpoint latency |
+| Local infrastructure | `serving/docker-compose.yml` runs PostgreSQL 16 and Redis 7, both bound to localhost |
+
+**Not built yet:** the Spring Boot endpoint, the Redis cache layer and its TTLs, the popularity-list refresh job, the Postman collection, and any endpoint latency measurement.
+
+**Running the data layer locally** (Docker Desktop running; the export needs the model artifact from `test_evaluation.py` and the processed data):
+
+```
+python export_recommendations.py
+cd serving
+copy .env.example .env      # then set POSTGRES_PASSWORD in .env (gitignored)
+docker compose up -d
+docker compose exec postgres psql -U coldstart -d coldstart -f /sql/load.sql
+```
 
 ## Reproducing
 
@@ -240,7 +269,7 @@ Run from the repo root with the processed data in `data/processed/` (output of `
 | Script | Purpose |
 |---|---|
 | `python baseline.py` | popularity and item-item CF baselines, metrics, segments |
-| `python model.py` | five-configuration ALS sweep and segment breakdown (`--best-only` fits only the factors=50 / alpha=15 / 15-iteration configuration) |
+| `python model.py` | five-configuration ALS sweep and segment breakdown (`--best-only` fits only the frozen configuration: factors=150, regularization=0.1, alpha=15, 40 iterations) |
 | `python cold_start_policy.py` | fallback-window comparison for the 0-purchase segment |
 | `python item_item_matched.py` | item-item CF re-scored with the 7-day fallback |
 | `python exclusion_comparison.py --factors 150 --regularization 0.1 --iterations 20` | ALS vs item-item vs recency, both exclusion settings, validation week |
@@ -251,5 +280,7 @@ Run from the repo root with the processed data in `data/processed/` (output of `
 | `python rolling_backtest.py` | weekly backtest over four earlier weeks plus the cached test week (about 1 hour; resumable) |
 | `python fallback_diagnostic.py` | popularity-window comparison by week, with overlap against each week's best sellers |
 | `python recency_window_recheck.py` | re-scores the recency baseline with a 7-day window from the cached backtest scores |
+| `python smoke_test_artifact.py` | reloads the saved artifact and checks that it reproduces the reported test-week MAP@12 under both exclusion settings |
+| `python export_recommendations.py` | precomputes both top-12 lists for every customer plus the fallback list into `models/serving_export/` (about 21 minutes; `--limit N --out-dir ...` for a trial run) |
 
 Several scripts reproduce a prior table as a self-check and print CHECK PASSED or CHECK FAILED; a failed check means the pipeline differs from the one that produced the reported numbers.

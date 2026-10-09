@@ -1,0 +1,46 @@
+# Local infrastructure for the serving API (Week 7-8): PostgreSQL 16 and Redis 7.
+#
+# First time (from this folder, Docker Desktop running):
+#   1. copy .env.example to .env and set POSTGRES_PASSWORD (.env is gitignored)
+#   2. docker compose up -d          (creates the tables from db/schema.sql on first start only)
+#   3. load the precomputed lists:   see db/load.sql for the command
+# Stop:  docker compose down         (keeps the database)   |   docker compose down -v   (wipes it)
+#
+# Both services listen on 127.0.0.1 only, so nothing on your network can reach them.
+# Redis here is a cache: no persistence, 256 MB cap, least-recently-used eviction. The cap is a
+# placeholder to revisit when the cache layer is built (TTLs and sizing are open in the design doc).
+services:
+  postgres:
+    image: postgres:16
+    container_name: coldstart-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-coldstart}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in serving/.env (copy .env.example)}
+      POSTGRES_DB: ${POSTGRES_DB:-coldstart}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro   # runs only when the data volume is empty
+      - ./db:/sql:ro                                                    # load.sql lives here
+      - ../models/serving_export:/import:ro                             # output of export_recommendations.py
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    container_name: coldstart-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
