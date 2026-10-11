@@ -6,7 +6,7 @@ Recommendation engine (ALS-based collaborative filtering, with a LightGBM re-ran
 
 ## Status
 
-Done: EDA, baselines (popularity, item-item CF), ALS core model with confidence weighting and a cold-start fallback policy, a matched three-way model comparison on a validation week and a test week with paired-bootstrap intervals. Also done: a rolling backtest over four earlier weeks. Also done: the serving data layer, with precomputed top-12 lists for every customer in the saved model, loaded into a local PostgreSQL alongside a Redis container (see Serving layer below). Not started: the Spring Boot endpoint, the Redis cache layer, and LightGBM re-ranking.
+Done: EDA, baselines (popularity, item-item CF), ALS core model with confidence weighting and a cold-start fallback policy, a matched three-way model comparison on a validation week and a test week with paired-bootstrap intervals. Also done: a rolling backtest over four earlier weeks. Also done: the serving data layer, with precomputed top-12 lists for every customer in the saved model, loaded into a local PostgreSQL alongside a Redis container (see Serving layer below). Also done: the Spring Boot endpoint `GET /v1/recommendations/{customerId}`, which reads those lists from PostgreSQL and is covered by 13 automated tests. Not started: the Redis cache layer, endpoint latency measurement, and LightGBM re-ranking.
 
 ## EDA Findings
 
@@ -235,13 +235,13 @@ The evaluation also argues for the ranker as the next step rather than more ALS 
 
 ## Serving layer (in progress)
 
-The API will not score customers at request time. The saved factors are an 885 MB NumPy file that a Spring Boot service cannot read, and scoring 105,542 articles per request would buy nothing, so `export_recommendations.py` scores every customer in the artifact once and writes two top-12 lists per customer. The service will look them up by primary key in PostgreSQL, with Redis in front as a cache. The design and its open decisions are in [`serving-design-draft.md`](serving-design-draft.md).
+The API will not score customers at request time. The saved factors are an 885 MB NumPy file that a Spring Boot service cannot read, and scoring 105,542 articles per request would buy nothing, so `export_recommendations.py` scores every customer in the artifact once and writes two top-12 lists per customer. The service looks them up by primary key in PostgreSQL; a Redis cache in front of it is planned but not built. The design and its open decisions are in [`serving-design-draft.md`](serving-design-draft.md).
 
 **Two modes.** `repurchase` (the default) allows articles the customer already bought; `discover` removes them. The default follows the evaluation. Against the 7-day popularity list, ALS leads on MAP@12 in all five evaluation weeks when already-bought items are allowed (significant in four; +0.6% and not significant on the test week), but its hit rate@12 is lower than the popularity list's in four of the five weeks. With already-bought items removed, ALS trails the popularity list on both metrics in four of five weeks, so `discover` stays available but is not the default, and its documentation says so. No model in this project beats the 7-day popularity list on both metrics in either mode.
 
-**Cold start is part of the response contract.** A known customer gets their precomputed list. A well-formed id that is not in the table gets HTTP 200 with the 7-day popularity list and `source: fallback_popularity_7d`. A malformed id gets 400. A new user never gets a 404 or 500. About 15,300 registered customers (no purchases before the history ended on 2020-09-15) have no embedding and take the fallback path. About 1,660 articles with no purchases in the history window can never be recommended; that is item cold start and is not addressed here.
+**Cold start is part of the response contract.** A known customer gets their precomputed list. A well-formed id that is not in the table gets HTTP 200 with the 7-day popularity list and `source: fallback_popularity_7d`. A malformed id (anything other than 64 lowercase hex characters, so ids with spaces or uppercase letters are rejected rather than normalized) or an unknown `mode` gets 400, and a missing `mode` means `repurchase`. If the fallback table is empty, which is a server fault and not a user error, the endpoint returns 503 instead of an empty list. A new user never gets a 404 or 500 from the lookup path. On fallback responses, `modelVersion` records the model run that produced the batch, not the method behind the list; `source` says which method produced it. About 15,300 registered customers (no purchases before the history ended on 2020-09-15) have no embedding and take the fallback path. About 1,660 articles with no purchases in the history window can never be recommended; that is item cold start and is not addressed here.
 
-**What exists and has been verified (October 8-9, 2026).**
+**What exists and has been verified (October 8-11, 2026).**
 
 | Item | Result |
 |---|---|
@@ -249,8 +249,10 @@ The API will not score customers at request time. The saved factors are an 885 M
 | PostgreSQL load | the 2,713,418 rows load with `COPY` in about 53 seconds; per-mode counts match the export |
 | Primary-key lookup | about 0.13 ms execution time for one lookup (a single EXPLAIN ANALYZE, warm cache). This is database time only, not endpoint latency |
 | Local infrastructure | `serving/docker-compose.yml` runs PostgreSQL 16 and Redis 7, both bound to localhost |
+| Endpoint contract tests | 13 automated tests pass: 8 web-layer contract tests with a mocked service and 5 service tests with a fake repository. They cover a known customer, an unknown valid id, a malformed id, an id with a leading space, an uppercase id, an invalid mode, a missing mode defaulting to `repurchase`, and an empty fallback table returning 503 |
+| Live check against the local database | For one sampled customer, the endpoint's `repurchase` list matched the PostgreSQL array exactly, in order. The `discover` list for that customer differed from it (it was not compared against the database). An all-zero id returned the fallback list in both modes with the requested mode echoed back. A malformed id, a leading-space id, an uppercase id and an invalid mode each returned 400. One customer was checked, not a sample |
 
-**Not built yet:** the Spring Boot endpoint, the Redis cache layer and its TTLs, the popularity-list refresh job, the Postman collection, and any endpoint latency measurement.
+**Not built yet:** the Redis cache layer and its TTLs, the popularity-list refresh job, the Postman collection, and any endpoint latency measurement. The endpoint has only been run locally.
 
 **Running the data layer locally** (Docker Desktop running; the export needs the model artifact from `test_evaluation.py` and the processed data):
 
@@ -260,6 +262,15 @@ cd serving
 copy .env.example .env      # then set POSTGRES_PASSWORD in .env (gitignored)
 docker compose up -d
 docker compose exec postgres psql -U coldstart -d coldstart -f /sql/load.sql
+```
+
+**Running the API locally** (containers up, and `POSTGRES_PASSWORD` set in the shell environment from `serving/.env`; the app reads it from the environment and never from a tracked file):
+
+```
+cd serving/api
+./mvnw spring-boot:run        # listens on port 8081
+curl "http://localhost:8081/v1/recommendations/<customer_id>?mode=repurchase"
+./mvnw test "-Dtest=DefaultRecommendationServiceTest,RecommendationControllerContractTest"
 ```
 
 ## Reproducing
