@@ -251,6 +251,7 @@ The API will not score customers at request time. The saved factors are an 885 M
 | Local infrastructure | `serving/docker-compose.yml` runs PostgreSQL 16 and Redis 7, both bound to localhost |
 | Endpoint contract tests | 13 automated tests pass: 8 web-layer contract tests with a mocked service and 5 service tests with a fake repository. They cover a known customer, an unknown valid id, a malformed id, an id with a leading space, an uppercase id, an invalid mode, a missing mode defaulting to `repurchase`, and an empty fallback table returning 503 |
 | Live check against the local database | For one sampled customer, the endpoint's `repurchase` list matched the PostgreSQL array exactly, in order. The `discover` list for that customer differed from it (it was not compared against the database). An all-zero id returned the fallback list in both modes with the requested mode echoed back. A malformed id, a leading-space id, an uppercase id and an invalid mode each returned 400. One customer was checked, not a sample |
+| Endpoint vs export parity | `serving/parity_check_api.py` sampled 600 random rows from `recommendations.csv` (295 `repurchase`, 305 `discover`, seed 42) and called the running endpoint for each. All 600 matched the export exactly: same 12 article ids in the same order, `source` `als`, same mode and model version. 20 random well-formed ids not in the table all returned the fallback list with the requested mode echoed, and 4 malformed requests returned 400. 624 checks, 0 failures. This is a sample, not every customer |
 
 **Not built yet:** the Redis cache layer and its TTLs, the popularity-list refresh job, the Postman collection, and any endpoint latency measurement. The endpoint has only been run locally.
 
@@ -293,5 +294,6 @@ Run from the repo root with the processed data in `data/processed/` (output of `
 | `python recency_window_recheck.py` | re-scores the recency baseline with a 7-day window from the cached backtest scores |
 | `python smoke_test_artifact.py` | reloads the saved artifact and checks that it reproduces the reported test-week MAP@12 under both exclusion settings |
 | `python export_recommendations.py` | precomputes both top-12 lists for every customer plus the fallback list into `models/serving_export/` (about 21 minutes; `--limit N --out-dir ...` for a trial run) |
+| `python serving/parity_check_api.py` | with the API running, samples rows from the export and checks that the endpoint returns exactly the same lists, plus fallback and 400 cases (about 10 seconds plus the request time) |
 
 Several scripts reproduce a prior table as a self-check and print CHECK PASSED or CHECK FAILED; a failed check means the pipeline differs from the one that produced the reported numbers.
