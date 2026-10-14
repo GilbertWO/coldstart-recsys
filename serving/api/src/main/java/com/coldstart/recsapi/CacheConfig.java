@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 @Configuration
 public class CacheConfig {
@@ -17,11 +18,20 @@ public class CacheConfig {
     }
 
     @Bean
+    public CacheStore cacheStore(StringRedisTemplate redis) {
+        return new RedisCacheStore(redis);
+    }
+
+    @Bean
     @Primary
     public RecommendationRepository cachingRecommendationRepository(
             JdbcRecommendationRepository jdbc,
+            CacheStore store,
             Clock clock,
-            @Value("${recs.fallback-cache-ttl:PT1M}") Duration ttl) {
-        return new CachingRecommendationRepository(jdbc, clock, ttl);
+            @Value("${recs.list-cache-ttl:PT1H}") Duration listTtl,
+            @Value("${recs.fallback-cache-ttl:PT1M}") Duration fallbackTtl) {
+        RecommendationRepository redisLayer =
+                new RedisCachingRecommendationRepository(jdbc, store, listTtl);
+        return new CachingRecommendationRepository(redisLayer, clock, fallbackTtl);
     }
 }
