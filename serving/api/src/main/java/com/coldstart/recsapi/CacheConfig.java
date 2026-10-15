@@ -28,10 +28,12 @@ public class CacheConfig {
             JdbcRecommendationRepository jdbc,
             CacheStore store,
             Clock clock,
+            @Value("${recs.list-cache-enabled:true}") boolean listCacheEnabled,
             @Value("${recs.list-cache-ttl:PT1H}") Duration listTtl,
             @Value("${recs.fallback-cache-ttl:PT1M}") Duration fallbackTtl) {
-        RecommendationRepository redisLayer =
-                new RedisCachingRecommendationRepository(jdbc, store, listTtl);
-        return new CachingRecommendationRepository(redisLayer, clock, fallbackTtl);
+        RecommendationRepository source = listCacheEnabled
+                ? new RedisCachingRecommendationRepository(jdbc, store, listTtl)
+                : jdbc;
+        return new CachingRecommendationRepository(source, clock, fallbackTtl);
     }
 }
