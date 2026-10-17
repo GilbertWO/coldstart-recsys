@@ -28,7 +28,7 @@ public class CacheConfig {
             JdbcRecommendationRepository jdbc,
             CacheStore store,
             Clock clock,
-            @Value("${recs.list-cache-enabled:true}") boolean listCacheEnabled,
+            @Value("${recs.list-cache-enabled:false}") boolean listCacheEnabled,
             @Value("${recs.list-cache-ttl:PT1H}") Duration listTtl,
             @Value("${recs.fallback-cache-ttl:PT1M}") Duration fallbackTtl) {
         RecommendationRepository source = listCacheEnabled
