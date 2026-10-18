@@ -65,3 +65,7 @@ logs/
 
 
 backtest_fold_*.json
+
+# Postman local-workspace files (created when the repo is opened in Postman); the collection we ship is serving/postman/
+/.postman/
+/postman/
