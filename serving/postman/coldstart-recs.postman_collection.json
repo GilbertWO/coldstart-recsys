@@ -1,0 +1,423 @@
+{
+  "info": {
+    "name": "coldstart-recsys serving API",
+    "description": "Response contract of GET /v1/recommendations/{customerId}. Run the whole collection in order (request 5 compares against the fallback list saved by request 4). The known-customer lists are the rows exported to models/serving_export/recommendations.csv for the model version in use; update knownRepurchase / knownDiscover after a new export. Not covered here: the 503 for an empty fallback table (it would need the database changed; the controller contract tests cover it).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8081"
+    },
+    {
+      "key": "knownId",
+      "value": "000058a12d5b43e67d225668fa1f8d618c13dc232df0cad8ffe7ad4a1091e318"
+    },
+    {
+      "key": "knownRepurchase",
+      "value": "[351484002, 723529001, 699080001, 699081001, 458543001, 609719001, 838055001, 859139002, 587229001, 859139001, 690936023, 690936006]"
+    },
+    {
+      "key": "knownDiscover",
+      "value": "[699080001, 699081001, 458543001, 609719001, 838055001, 859139002, 587229001, 859139001, 690936023, 690936006, 715303001, 715343003]"
+    },
+    {
+      "key": "unknownId",
+      "value": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "item": [
+    {
+      "name": "1 Known customer, default mode",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "const distinct = (a) => new Set(a).size === a.length;",
+              "pm.test('source is als and the mode is echoed', () => {",
+              "  pm.expect(body.source).to.eql('als');",
+              "  pm.expect(body.mode).to.eql('repurchase');",
+              "  pm.expect(body.customerId).to.eql(pm.collectionVariables.get('knownId'));",
+              "});",
+              "pm.test('12 distinct items, equal to the exported list in the same order', () => {",
+              "  pm.expect(body.items).to.have.lengthOf(12);",
+              "  pm.expect(distinct(body.items)).to.be.true;",
+              "  pm.expect(body.items).to.eql(JSON.parse(pm.collectionVariables.get('knownRepurchase')));",
+              "});",
+              "pm.test('model version is reported', () => pm.expect(body.modelVersion).to.match(/^als-/));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/recommendations/{{knownId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "recommendations",
+            "{{knownId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "2 Known customer, mode=repurchase",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "const distinct = (a) => new Set(a).size === a.length;",
+              "pm.test('source is als and the mode is echoed', () => {",
+              "  pm.expect(body.source).to.eql('als');",
+              "  pm.expect(body.mode).to.eql('repurchase');",
+              "  pm.expect(body.customerId).to.eql(pm.collectionVariables.get('knownId'));",
+              "});",
+              "pm.test('12 distinct items, equal to the exported list in the same order', () => {",
+              "  pm.expect(body.items).to.have.lengthOf(12);",
+              "  pm.expect(distinct(body.items)).to.be.true;",
+              "  pm.expect(body.items).to.eql(JSON.parse(pm.collectionVariables.get('knownRepurchase')));",
+              "});",
+              "pm.test('model version is reported', () => pm.expect(body.modelVersion).to.match(/^als-/));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/recommendations/{{knownId}}?mode=repurchase",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "recommendations",
+            "{{knownId}}"
+          ],
+          "query": [
+            {
+              "key": "mode",
+              "value": "repurchase"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "3 Known customer, mode=discover",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "const distinct = (a) => new Set(a).size === a.length;",
+              "pm.test('source is als and the mode is echoed', () => {",
+              "  pm.expect(body.source).to.eql('als');",
+              "  pm.expect(body.mode).to.eql('discover');",
+              "  pm.expect(body.customerId).to.eql(pm.collectionVariables.get('knownId'));",
+              "});",
+              "pm.test('12 distinct items, equal to the exported list in the same order', () => {",
+              "  pm.expect(body.items).to.have.lengthOf(12);",
+              "  pm.expect(distinct(body.items)).to.be.true;",
+              "  pm.expect(body.items).to.eql(JSON.parse(pm.collectionVariables.get('knownDiscover')));",
+              "});",
+              "pm.test('model version is reported', () => pm.expect(body.modelVersion).to.match(/^als-/));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/recommendations/{{knownId}}?mode=discover",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "recommendations",
+            "{{knownId}}"
+          ],
+          "query": [
+            {
+              "key": "mode",
+              "value": "discover"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "4 Unknown valid id, default mode (fallback)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "const distinct = (a) => new Set(a).size === a.length;",
+              "pm.test('fallback source and the requested mode is echoed', () => {",
+              "  pm.expect(body.source).to.eql('fallback_popularity_7d');",
+              "  pm.expect(body.mode).to.eql('repurchase');",
+              "  pm.expect(body.customerId).to.eql(pm.collectionVariables.get('unknownId'));",
+              "});",
+              "pm.test('12 distinct items', () => {",
+              "  pm.expect(body.items).to.have.lengthOf(12);",
+              "  pm.expect(distinct(body.items)).to.be.true;",
+              "});",
+              "pm.collectionVariables.set('fallbackItems', JSON.stringify(body.items));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/recommendations/{{unknownId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "recommendations",
+            "{{unknownId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "5 Unknown valid id, mode=discover (same fallback list)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "const distinct = (a) => new Set(a).size === a.length;",
+              "pm.test('fallback source and the requested mode is echoed', () => {",
+              "  pm.expect(body.source).to.eql('fallback_popularity_7d');",
+              "  pm.expect(body.mode).to.eql('discover');",
+              "  pm.expect(body.customerId).to.eql(pm.collectionVariables.get('unknownId'));",
+              "});",
+              "pm.test('12 distinct items', () => {",
+              "  pm.expect(body.items).to.have.lengthOf(12);",
+              "  pm.expect(distinct(body.items)).to.be.true;",
+              "});",
+              "pm.test('same fallback list for both modes', () => {",
+              "  pm.expect(body.items).to.eql(JSON.parse(pm.collectionVariables.get('fallbackItems')));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/recommendations/{{unknownId}}?mode=discover",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "recommendations",
+            "{{unknownId}}"
+          ],
+          "query": [
+            {
+              "key": "mode",
+              "value": "discover"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "6 Malformed id: too short",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('a short id is rejected with 400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/recommendations/abc123",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "recommendations",
+            "abc123"
+          ]
+        }
+      }
+    },
+    {
+      "name": "7 Malformed id: uppercase",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('knownIdUpper', pm.collectionVariables.get('knownId').toUpperCase());"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('an uppercase id is rejected with 400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/recommendations/{{knownIdUpper}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "recommendations",
+            "{{knownIdUpper}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "8 Malformed id: leading space",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('an id with a leading space is rejected with 400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/recommendations/%20{{knownId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "recommendations",
+            "%20{{knownId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "9 Invalid mode",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('an unknown mode is rejected with 400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/recommendations/{{knownId}}?mode=bogus",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "recommendations",
+            "{{knownId}}"
+          ],
+          "query": [
+            {
+              "key": "mode",
+              "value": "bogus"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "10 Health",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('overall status is UP and the database is UP', () => {",
+              "  const b = pm.response.json();",
+              "  pm.expect(b.status).to.eql('UP');",
+              "  pm.expect(b.components.db.status).to.eql('UP');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/actuator/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "actuator",
+            "health"
+          ]
+        }
+      }
+    }
+  ]
+}
