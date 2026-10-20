@@ -75,11 +75,32 @@ The job runs by hand and nothing schedules it. To remove a refreshed row, run `D
 
 The Postman collection sends a known customer in default, `repurchase` and `discover` mode and checks the exact lists, sends an unknown id in two modes and checks the fallback list, sends four bad requests (too short, uppercase, leading space, unknown mode) and checks the health endpoint. On October 18 against the running app it passed: 10 requests, 25 assertions, 0 failed. It does not cover the 503 case, which only the controller tests cover. Its variables (`knownId` and the two expected lists) were copied from the current export, so update them if the export is rebuilt.
 
+## When the data is stale
+
+The service never checks how old its data is. It returns whatever the tables hold, and the only data fault it reports is an empty fallback table (503). Two things can be old, and they show up in different places.
+
+The personalized lists carry a `modelVersion` in every response, for example `als-f150-r0.1-a15-i40-h2020-09-15`. `export_recommendations.py` builds it from the model's settings: 150 factors, regularization 0.1, alpha 15, 40 iterations, and `h`, the last day of purchase history the model was trained on. Purchases after that day have no effect on any list. To see what the table holds:
+
+```
+docker compose exec postgres psql -U coldstart -d coldstart -c "SELECT model_version, count(*) FROM recommendations GROUP BY model_version;"
+```
+
+On October 20 this returned one version for all 2,713,418 rows (both modes for 1,356,709 customers), with `h2020-09-15`. A table is stale when that date is well behind the newest transactions you have.
+
+The fallback list is different: its age is not visible in a response. The refresh job copies `model_version` from the latest row, so a freshly refreshed list and the original one report the same `modelVersion`, and the API does not select `as_of` at all. The only place to see it is the table:
+
+```
+docker compose exec postgres psql -U coldstart -d coldstart -c "SELECT source, as_of, window_days, model_version FROM fallback_lists ORDER BY as_of DESC;"
+```
+
+On October 20 this returned one row, `as_of` 2020-09-15 with a 7-day window. This matters because a stale popularity list can miss most of a week's best sellers; in the evaluation, the week of 2020-08-12 was one where the list overlapped none of them (root README). Exposing `as_of` in a response or in the health details would close this gap; it has not been built.
+
 ## Limitations
 
 - Everything ran on one machine over loopback against a warm local PostgreSQL. A larger table or a database on another host could change every latency number.
 - With the Redis layer on, a database outage stays hidden while entries are cached, health reports DOWN while Redis is down even though requests succeed, each request waits for a 100 ms timeout while Redis is down (there is no circuit breaker), and each failed read logs a warning.
 - The refresh job is manual.
+- The service does not detect stale data, and the age of the fallback list is not visible in a response (see "When the data is stale").
 - The 2020-09-22 row used to check the refresh job end to end contained test-week purchases. It was a serving demonstration and was deleted afterwards; no evaluation number depends on it.
 - About 15,300 customers have no embedding and always take the fallback path. About 1,660 articles can never be recommended; item cold start is not solved here.
 - The API has been run only locally. It has no authentication, no rate limiting and no container image.
