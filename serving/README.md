@@ -47,6 +47,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\serving\run-api.ps1
 
 Two cautions. `load.sql` replaces the contents of both tables, so re-running it also deletes any fallback rows added by the refresh job (the original 2020-09-15 row comes back from the export). And `docker compose down -v` wipes the database, while plain `docker compose down` keeps it.
 
+### From a fresh clone
+
+On October 23 a fresh clone (Windows, Java 21.0.2) passed `.\mvnw test` in `serving/api`: 33 tests, 0 failures, with `POSTGRES_PASSWORD` unset and the containers stopped, so the tests need neither the database nor the password. The machine's Maven cache already held every dependency, so the check did not cover first-time downloads.
+
+Running the API needs more than a clone. The model export is not in the repository: `models/` is gitignored because the factor matrices are large. `export_recommendations.py` reads `models/`, which `python test_evaluation.py` writes from the Kaggle H&M data (root README). A stranger also needs `serving/.env`, copied from the tracked `serving/.env.example`, with a password of their choosing.
+
 ## The Redis list cache
 
 Off by default. Switch it on with `--recs.list-cache-enabled=true`, for example `.\serving\run-api.ps1 --recs.list-cache-enabled=true`. The Redis health check is registered only when the cache is on.
