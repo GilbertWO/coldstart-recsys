@@ -1,0 +1,25 @@
+setting,metric,scope,pair,wk 2020-08-12,wk 2020-08-19,wk 2020-08-26,wk 2020-09-02,TEST,mean,sd,weeks A ahead (sig),weeks B ahead (sig),weeks A ahead (any)
+exclusion=True,MAP@12,aggregate,ALS vs item-item CF,+0.6,-0.2,+8.0*,+3.5,+6.2*,3.609273550025699,3.544193956830812,2,0,4
+exclusion=True,MAP@12,aggregate,ALS vs recency 14d,+60.2*,+94.7*,-14.1*,-9.2*,-25.5*,21.225530460370273,53.07730848579171,2,3,2
+exclusion=True,MAP@12,aggregate,item-item CF vs recency 14d,+59.3*,+95.1*,-20.5*,-12.2*,-29.8*,18.376021109551324,55.53342663167392,2,3,2
+exclusion=True,MAP@12,3+ purchases,ALS vs item-item CF,-0.4,+1.2,+10.0*,+3.9,+9.6*,4.85694018332134,4.766221494083226,2,0,4
+exclusion=True,MAP@12,3+ purchases,ALS vs recency 14d,+64.4*,+86.3*,-15.5*,-12.1*,-29.9*,18.6269507463815,52.74306177521941,2,3,2
+exclusion=True,MAP@12,3+ purchases,item-item CF vs recency 14d,+65.1*,+84.0*,-23.1*,-15.3*,-36.1*,14.891703727770828,55.3319118386848,2,3,2
+exclusion=True,hit_rate@12,aggregate,ALS vs item-item CF,-6.6*,-7.9*,-4.3*,-7.1*,-5.4*,-6.240465871255985,1.4113597290997495,0,5,0
+exclusion=True,hit_rate@12,aggregate,ALS vs recency 14d,+16.9*,+13.2*,-26.5*,-38.8*,-43.2*,-15.672200364320924,28.719173572412743,2,3,2
+exclusion=True,hit_rate@12,aggregate,item-item CF vs recency 14d,+25.1*,+22.8*,-23.2*,-34.1*,-39.9*,-9.859335060816594,31.45603034366021,2,3,2
+exclusion=True,hit_rate@12,3+ purchases,ALS vs item-item CF,-7.3*,-8.0*,-4.3*,-7.4*,-4.6*,-6.328929850407607,1.7434122688584286,0,5,0
+exclusion=True,hit_rate@12,3+ purchases,ALS vs recency 14d,+19.6*,+11.0*,-28.7*,-42.2*,-46.7*,-17.413038350864582,30.724071225509952,2,3,2
+exclusion=True,hit_rate@12,3+ purchases,item-item CF vs recency 14d,+29.0*,+20.7*,-25.5*,-37.6*,-44.1*,-11.507296018093049,33.988819678391586,2,3,2
+exclusion=False,MAP@12,aggregate,ALS vs item-item CF,-2.4,+2.4,+15.0*,+9.2*,+7.5*,6.333033728185717,6.634270733847072,3,0,4
+exclusion=False,MAP@12,aggregate,ALS vs recency 14d,+147.4*,+212.1*,+47.1*,+51.0*,+23.9*,96.3084441192754,80.21377857955753,5,0,5
+exclusion=False,MAP@12,aggregate,item-item CF vs recency 14d,+153.3*,+205.0*,+27.9*,+38.3*,+15.3*,87.96204851360947,85.60680338183809,5,0,5
+exclusion=False,MAP@12,3+ purchases,ALS vs item-item CF,-3.0,+3.6,+17.1*,+10.4*,+10.0*,7.6343656824234145,7.613152918591971,3,0,4
+exclusion=False,MAP@12,3+ purchases,ALS vs recency 14d,+154.5*,+201.2*,+48.7*,+50.5*,+23.2*,95.60487800552593,77.59642328153092,5,0,5
+exclusion=False,MAP@12,3+ purchases,item-item CF vs recency 14d,+162.2*,+190.7*,+26.9*,+36.3*,+12.1*,85.64135495280749,83.97976601753224,5,0,5
+exclusion=False,hit_rate@12,aggregate,ALS vs item-item CF,+2.8*,+5.8*,+11.7*,+7.2*,+6.1*,6.71616278175596,3.2153678874190526,5,0,5
+exclusion=False,hit_rate@12,aggregate,ALS vs recency 14d,+58.5*,+58.4*,-0.2,-14.2*,-19.4*,16.616097840747003,38.81973461132069,2,2,2
+exclusion=False,hit_rate@12,aggregate,item-item CF vs recency 14d,+54.1*,+49.7*,-10.6*,-19.9*,-24.1*,9.842780036035268,38.73774732845067,2,3,2
+exclusion=False,hit_rate@12,3+ purchases,ALS vs item-item CF,+2.9,+6.7*,+13.5*,+8.4*,+8.1*,7.922533988456713,3.810143909254569,4,0,5
+exclusion=False,hit_rate@12,3+ purchases,ALS vs recency 14d,+64.1*,+58.3*,-0.3,-15.8*,-20.9*,17.092268683935202,41.02951389027124,2,2,2
+exclusion=False,hit_rate@12,3+ purchases,item-item CF vs recency 14d,+59.6*,+48.3*,-12.1*,-22.3*,-26.8*,9.31651855749115,41.26328666142901,2,3,2

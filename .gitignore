@@ -10,6 +10,11 @@ Claude outputs/
 data/
 *.csv
 *.parquet
+# Aggregate result tables at the repo root (metrics only, no customer or article ids) are evidence for the README
+!/*_results.csv
+!/backtest_*.csv
+!/convergence_*.csv
+!/recency_7d_recheck_*.csv
 !data/.gitkeep
 models/
 *.npz
