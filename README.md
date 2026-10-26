@@ -1,4 +1,6 @@
 # coldstart-recsys
+
+[![Java tests](https://github.com/GilbertWO/coldstart-recsys/actions/workflows/java-tests.yml/badge.svg)](https://github.com/GilbertWO/coldstart-recsys/actions/workflows/java-tests.yml)
 Recommendation engine (ALS-based collaborative filtering, with a LightGBM re-ranking stage identified as the natural next step) trained on real e-commerce transactions, served via Spring Boot + PostgreSQL (with an optional Redis cache, off by default), with explicit cold-start handling for new users.
 
 ## Dataset
