@@ -56,7 +56,7 @@ Given that, the honest call would be to report the *unexcluded* numbers, since t
 
 It isn't a fair fight as stated: the recency heuristic was never run through the exclusion filter, and item-item CF *without* exclusion scores 0.00839 — comfortably ahead of it. So on equal terms (neither excluding repurchases), personalization does earn its keep over a recency-only signal. But the specific number this README reports for item-item CF, chosen for the exclusion-tradeoff reasoning above, is not the equal-terms number — and it does lose to a heuristic with no personalization in it at all. **Update (Oct 4):** the equal-terms comparison has now been run, per segment and with exclusion applied to the recency list; see "Model comparison" below. With exclusion on, a 7-day recency list beats both personalized models in four of five backtest weeks and fails in one (a week of complete best-seller turnover); see the rolling backtest.
 
-### Cold-start segment breakdown: personalization value is concentrated in the "a little data" band
+### Cold-start segment breakdown: against all-time popularity, item-item CF gains most in the 1-2 purchase band
 
 | Segment | n customers | Popularity MAP@12 | Item-item CF MAP@12 | Relative lift |
 |---|---|---|---|---|

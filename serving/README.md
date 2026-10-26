@@ -79,6 +79,8 @@ The job runs by hand and nothing schedules it. To remove a refreshed row, run `D
 | Parity | `python serving/parity_check_api.py` with the API running | 600 sampled rows against the export, 20 unknown ids and 4 malformed requests: 624 checks, 0 failures |
 | Postman | `serving/postman/coldstart-recs.postman_collection.json` | 10 requests, 25 assertions, run in Postman's collection runner with the API running |
 
+GitHub Actions runs the Java tests on every push to `main` and on pull requests (`.github/workflows/java-tests.yml`). The Python tests and the parity check stay local: they need the Kaggle data or a loaded database.
+
 The Postman collection sends a known customer in default, `repurchase` and `discover` mode and checks the exact lists, sends an unknown id in two modes and checks the fallback list, sends four bad requests (too short, uppercase, leading space, unknown mode) and checks the health endpoint. On October 18 against the running app it passed: 10 requests, 25 assertions, 0 failed. It does not cover the 503 case, which only the controller tests cover. Its variables (`knownId` and the two expected lists) were copied from the current export, so update them if the export is rebuilt.
 
 ## When the data is stale
