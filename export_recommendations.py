@@ -13,7 +13,7 @@ and the 7-day popularity fallback list saved in the artifact's metadata.
 Outputs (default models/serving_export/, which is covered by .gitignore via `models/`):
   recommendations.csv  header: customer_id,mode,items,model_version. One row per customer
                        per mode. `items` is a PostgreSQL array literal such as
-                       "{108775015,111565001,...}" (12 integer article ids, best first), so
+                       "{<article_id>,<article_id>,...}" (12 integer article ids, best first), so
                        the file can be loaded with COPY ... CSV HEADER into an integer[] column.
   fallback.csv         header: source,as_of,window_days,items,model_version
   export_manifest.json counts, model_version, history_end, file sizes, checks that passed.

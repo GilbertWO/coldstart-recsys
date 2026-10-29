@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "coldstart-recsys serving API",
-    "description": "Response contract of GET /v1/recommendations/{customerId}. Run the whole collection in order (request 5 compares against the fallback list saved by request 4). The known-customer lists are the rows exported to models/serving_export/recommendations.csv for the model version in use; update knownRepurchase / knownDiscover after a new export. Not covered here: the 503 for an empty fallback table (it would need the database changed; the controller contract tests cover it).",
+    "description": "Response contract of GET /v1/recommendations/{customerId}. Run the whole collection in order (request 5 compares against the fallback list saved by request 4). knownId, knownRepurchase and knownDiscover are deliberately empty here: they are real ids from the Kaggle data, whose rules do not allow redistribution. Generate them with `python serving/postman/make_local_env.py` (reads models/serving_export/recommendations.csv) and select the environment it writes, serving/postman/local.postman_environment.json (gitignored). Re-run the script after a new export. Not covered here: the 503 for an empty fallback table (it would need the database changed; the controller contract tests cover it).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -11,15 +11,15 @@
     },
     {
       "key": "knownId",
-      "value": "000058a12d5b43e67d225668fa1f8d618c13dc232df0cad8ffe7ad4a1091e318"
+      "value": ""
     },
     {
       "key": "knownRepurchase",
-      "value": "[351484002, 723529001, 699080001, 699081001, 458543001, 609719001, 838055001, 859139002, 587229001, 859139001, 690936023, 690936006]"
+      "value": ""
     },
     {
       "key": "knownDiscover",
-      "value": "[699080001, 699081001, 458543001, 609719001, 838055001, 859139002, 587229001, 859139001, 690936023, 690936006, 715303001, 715343003]"
+      "value": ""
     },
     {
       "key": "unknownId",
@@ -41,12 +41,12 @@
               "pm.test('source is als and the mode is echoed', () => {",
               "  pm.expect(body.source).to.eql('als');",
               "  pm.expect(body.mode).to.eql('repurchase');",
-              "  pm.expect(body.customerId).to.eql(pm.collectionVariables.get('knownId'));",
+              "  pm.expect(body.customerId).to.eql(pm.variables.get('knownId'));",
               "});",
               "pm.test('12 distinct items, equal to the exported list in the same order', () => {",
               "  pm.expect(body.items).to.have.lengthOf(12);",
               "  pm.expect(distinct(body.items)).to.be.true;",
-              "  pm.expect(body.items).to.eql(JSON.parse(pm.collectionVariables.get('knownRepurchase')));",
+              "  pm.expect(body.items).to.eql(JSON.parse(pm.variables.get('knownRepurchase')));",
               "});",
               "pm.test('model version is reported', () => pm.expect(body.modelVersion).to.match(/^als-/));"
             ]
@@ -83,12 +83,12 @@
               "pm.test('source is als and the mode is echoed', () => {",
               "  pm.expect(body.source).to.eql('als');",
               "  pm.expect(body.mode).to.eql('repurchase');",
-              "  pm.expect(body.customerId).to.eql(pm.collectionVariables.get('knownId'));",
+              "  pm.expect(body.customerId).to.eql(pm.variables.get('knownId'));",
               "});",
               "pm.test('12 distinct items, equal to the exported list in the same order', () => {",
               "  pm.expect(body.items).to.have.lengthOf(12);",
               "  pm.expect(distinct(body.items)).to.be.true;",
-              "  pm.expect(body.items).to.eql(JSON.parse(pm.collectionVariables.get('knownRepurchase')));",
+              "  pm.expect(body.items).to.eql(JSON.parse(pm.variables.get('knownRepurchase')));",
               "});",
               "pm.test('model version is reported', () => pm.expect(body.modelVersion).to.match(/^als-/));"
             ]
@@ -131,12 +131,12 @@
               "pm.test('source is als and the mode is echoed', () => {",
               "  pm.expect(body.source).to.eql('als');",
               "  pm.expect(body.mode).to.eql('discover');",
-              "  pm.expect(body.customerId).to.eql(pm.collectionVariables.get('knownId'));",
+              "  pm.expect(body.customerId).to.eql(pm.variables.get('knownId'));",
               "});",
               "pm.test('12 distinct items, equal to the exported list in the same order', () => {",
               "  pm.expect(body.items).to.have.lengthOf(12);",
               "  pm.expect(distinct(body.items)).to.be.true;",
-              "  pm.expect(body.items).to.eql(JSON.parse(pm.collectionVariables.get('knownDiscover')));",
+              "  pm.expect(body.items).to.eql(JSON.parse(pm.variables.get('knownDiscover')));",
               "});",
               "pm.test('model version is reported', () => pm.expect(body.modelVersion).to.match(/^als-/));"
             ]
@@ -292,7 +292,7 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.variables.set('knownIdUpper', pm.collectionVariables.get('knownId').toUpperCase());"
+              "pm.variables.set('knownIdUpper', pm.variables.get('knownId').toUpperCase());"
             ]
           }
         },
