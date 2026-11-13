@@ -46,18 +46,27 @@ OUT_DIR = Path("data/candidates")
 
 
 def split_week(week):
-    """Returns (history, target, week_start) with the same leak guards as rolling_backtest.run_folds."""
+    """Returns (history, target, week_start) with the same leak guards as rolling_backtest.run_folds.
+
+    week: "train" (the week before validation), "val" (the validation week, history = train split)
+    or "test" (the test week, history = train + validation, as in test_evaluation.py)."""
     train, val = base.load_train(), base.load_val()
     all_hist = pd.concat([train, val], ignore_index=True)
-    val_start = val["t_dat"].min().normalize()
-    week_start = val_start if week == "val" else val_start - pd.Timedelta(days=7)
-    week_end = week_start + pd.Timedelta(days=7)
-    target = all_hist[(all_hist["t_dat"] >= week_start) & (all_hist["t_dat"] < week_end)]
-    history = all_hist[all_hist["t_dat"] < week_start]
+    test_path = Path("data/processed") / "transactions_test.parquet"
+    if week == "test":
+        target = pd.read_parquet(test_path)
+        week_start = target["t_dat"].min().normalize()
+        history = all_hist
+    else:
+        val_start = val["t_dat"].min().normalize()
+        week_start = val_start if week == "val" else val_start - pd.Timedelta(days=7)
+        week_end = week_start + pd.Timedelta(days=7)
+        target = all_hist[(all_hist["t_dat"] >= week_start) & (all_hist["t_dat"] < week_end)]
+        history = all_hist[all_hist["t_dat"] < week_start]
+        test = pd.read_parquet(test_path, columns=["t_dat"])
+        assert target["t_dat"].max() < test["t_dat"].min(), "target week reaches the test split"
     assert len(target) > 0 and len(history) > 0, "empty target or history"
     assert history["t_dat"].max() < target["t_dat"].min(), "history overlaps the target week"
-    test = pd.read_parquet(Path("data/processed") / "transactions_test.parquet", columns=["t_dat"])
-    assert target["t_dat"].max() < test["t_dat"].min(), "target week reaches the test split"
     log.info("target %s -> %s (%d rows, %d customers) | history ends %s (%d rows)",
              target["t_dat"].min().date(), target["t_dat"].max().date(), len(target),
              target["customer_id"].nunique(), history["t_dat"].max().date(), len(history))
@@ -97,7 +106,7 @@ def recent_purchases(history, customers, days):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--week", choices=("val", "train"), required=True)
+    ap.add_argument("--week", choices=("val", "train", "test"), required=True)
     ap.add_argument("--n", type=int, nargs="+", default=[12, 50, 100], help="ALS top-N sizes to measure")
     ap.add_argument("--pop-k", type=int, default=POP_UNION_K, help="7-day popularity items added to every customer")
     ap.add_argument("--recent-days", type=int, default=0,

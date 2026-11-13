@@ -35,6 +35,7 @@ import features as ft
 log = logging.getLogger("train_ranker")
 FEAT_DIR = Path("data/features")
 RESULTS_CSV = Path("reranker_validation_results.csv")
+TEST_RESULTS_CSV = Path("reranker_test_results.csv")
 K = 12
 
 
@@ -54,10 +55,20 @@ def main():
     ap.add_argument("--learning-rate", type=float, default=0.05)
     ap.add_argument("--num-leaves", type=int, default=63)
     ap.add_argument("--n-boot", type=int, default=2000)
+    ap.add_argument("--train-week", choices=("train", "val"), default="train",
+                    help="week whose labels train the ranker (validation runs: train; the test run: val)")
+    ap.add_argument("--eval-week", choices=("val", "test"), default="val")
+    ap.add_argument("--final", action="store_true",
+                    help="required to score the test week; the test week is scored once, with settings fixed beforehand")
     args = ap.parse_args()
+    if args.eval_week == "test" and not args.final:
+        raise SystemExit("Refusing to score the test week without --final. Settings must be fixed on validation first.")
+    if args.eval_week == "test" and args.train_week != "val":
+        raise SystemExit("For the test week, train the ranker on the most recent labelled week: --train-week val")
+    results_csv = TEST_RESULTS_CSV if args.eval_week == "test" else RESULTS_CSV
 
     discover = args.mode == "discover"
-    train = pd.read_parquet(FEAT_DIR / "features_train.parquet")
+    train = pd.read_parquet(FEAT_DIR / f"features_{args.train_week}.parquet")
     if discover:
         train = train[train["ci_count"] == 0]
     has_pos = train.groupby("customer_id")["label"].transform("max") > 0
@@ -71,12 +82,12 @@ def main():
     dtrain = lgb.Dataset(train[ft.FEATURES], label=train["label"], group=groups)
     model = lgb.train(params, dtrain, num_boost_round=args.n_estimators)
 
-    val = pd.read_parquet(FEAT_DIR / "features_val.parquet")
+    val = pd.read_parquet(FEAT_DIR / f"features_{args.eval_week}.parquet")
     if discover:
         val = val[val["ci_count"] == 0].copy()
     val["score"] = model.predict(val[ft.FEATURES])
 
-    history, target, week_start = cands.split_week("val")
+    history, target, week_start = cands.split_week(args.eval_week)
     customers = list(target["customer_id"].unique())
     actual = target.groupby("customer_id")["article_id"].apply(set).to_dict()
     seg = base.segment_customers(history, customers).astype(str).to_numpy()
@@ -137,7 +148,7 @@ def main():
     pd.set_option("display.max_columns", 30)
     cols = [c for c in ["scope", "n", "ranker_MAP@12", "ALS_MAP@12", "pop7d_MAP@12", "repurchase+pop_MAP@12",
             "ranker_vs_repurchase+pop_rel_pct", "ranker_vs_repurchase+pop_ci"] if c in res]
-    print(f"\nvalidation week, mode={args.mode} (* = 95% interval excludes 0):")
+    print(f"\n{args.eval_week} week (ranker trained on the {args.train_week} week), mode={args.mode} (* = 95% interval excludes 0):")
     print(res[cols].to_string(index=False))
     print("\nhit rate@12:")
     print(res[[c for c in ["scope", "ranker_hit@12", "ALS_hit@12", "pop7d_hit@12", "repurchase+pop_hit@12"] if c in res]].to_string(index=False))
@@ -150,10 +161,12 @@ def main():
     print("\nfeature importance (share of total gain):")
     print((imp / imp.sum()).sort_values(ascending=False).round(3).to_string())
 
-    if RESULTS_CSV.exists():
-        res = pd.concat([pd.read_csv(RESULTS_CSV), res], ignore_index=True)
-    res.to_csv(RESULTS_CSV, index=False)
-    log.info("appended to %s", RESULTS_CSV)
+    res.insert(1, "train_week", args.train_week)
+    res.insert(2, "eval_week", args.eval_week)
+    if results_csv.exists():
+        res = pd.concat([pd.read_csv(results_csv), res], ignore_index=True)
+    res.to_csv(results_csv, index=False)
+    log.info("appended to %s", results_csv)
 
 
 if __name__ == "__main__":

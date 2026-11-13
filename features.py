@@ -80,7 +80,7 @@ def build_features(history: pd.DataFrame, cand: pd.DataFrame, cutoff: pd.Timesta
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--week", choices=("val", "train"), required=True)
+    ap.add_argument("--week", choices=("val", "train", "test"), required=True)
     args = ap.parse_args()
 
     history, target, week_start = cands.split_week(args.week)
