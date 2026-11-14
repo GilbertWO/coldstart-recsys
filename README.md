@@ -1,14 +1,14 @@
 # coldstart-recsys
 
 [![Java tests](https://github.com/GilbertWO/coldstart-recsys/actions/workflows/java-tests.yml/badge.svg)](https://github.com/GilbertWO/coldstart-recsys/actions/workflows/java-tests.yml)
-Recommendation engine (ALS-based collaborative filtering, with a LightGBM re-ranking stage identified as the natural next step) trained on real e-commerce transactions, served via Spring Boot + PostgreSQL (with an optional Redis cache, off by default), with explicit cold-start handling for new users.
+Recommendation engine (ALS-based collaborative filtering, plus an offline LightGBM re-ranking stage) trained on real e-commerce transactions, served via Spring Boot + PostgreSQL (with an optional Redis cache, off by default), with explicit cold-start handling for new users.
 
 ## Dataset
 [H&M Personalized Fashion Recommendations](https://www.kaggle.com/competitions/h-and-m-personalized-fashion-recommendations) — 1,371,980 registered customers, 31,788,324 transactions in `transactions_train.csv`.
 
 ## Status
 
-Done: EDA, baselines (popularity, item-item CF), ALS core model with confidence weighting and a cold-start fallback policy, a matched three-way model comparison on a validation week and a test week with paired-bootstrap intervals. Also done: a rolling backtest over four earlier weeks. Also done: the serving data layer, with precomputed top-12 lists for every customer in the saved model, loaded into a local PostgreSQL alongside a Redis container (see Serving layer below). Also done: the Spring Boot endpoint `GET /v1/recommendations/{customerId}`, which reads those lists from PostgreSQL and is covered by 32 automated tests, with the fallback list cached in process memory and a Redis cache for per-customer lists. The Redis layer is correct and survives a Redis outage. A same-session comparison with it switched off (see the verification table) shows it speeds up known customers only when traffic is spread evenly, adds about 0.5 to 0.7 ms to every request for an unknown id, and makes the tail worse on skewed traffic, so it is off by default and can be switched on with `recs.list-cache-enabled=true`. Not started: LightGBM re-ranking.
+Done: EDA, baselines (popularity, item-item CF), ALS core model with confidence weighting and a cold-start fallback policy, a matched three-way model comparison on a validation week and a test week with paired-bootstrap intervals. Also done: a rolling backtest over four earlier weeks. Also done: the serving data layer, with precomputed top-12 lists for every customer in the saved model, loaded into a local PostgreSQL alongside a Redis container (see Serving layer below). Also done: the Spring Boot endpoint `GET /v1/recommendations/{customerId}`, which reads those lists from PostgreSQL and is covered by 32 automated tests, with the fallback list cached in process memory and a Redis cache for per-customer lists. The Redis layer is correct and survives a Redis outage. A same-session comparison with it switched off (see the verification table) shows it speeds up known customers only when traffic is spread evenly, adds about 0.5 to 0.7 ms to every request for an unknown id, and makes the tail worse on skewed traffic, so it is off by default and can be switched on with `recs.list-cache-enabled=true`. Also done (November): a LightGBM re-ranking stage, evaluated offline on the validation and test weeks (see Re-ranking stage); the API still serves the ALS lists.
 
 ## EDA Findings
 
@@ -225,11 +225,68 @@ What this shows:
 
 Takeaway as measured: a 7-day popularity list is a strong baseline on this dataset. With already-bought items excluded it beats ALS and item-item CF on both MAP@12 and hit rate in four of five weeks, and it fails only in a week when best sellers turned over completely. The personalized models are steady week to week (MAP@12 about 0.0047-0.0052 with exclusion on, 0.0081-0.0095 without) and their clearest value is MAP when repeat purchases are allowed (ALS beats item-item in that setting and beats the 7-day list in four of five weeks), a lead that was zero on the test week. So the honest statement is not "personalization beats the baselines", it is that personalization adds ranking quality in specific conditions and that a recency signal and the personalized models fail in different weeks. That is the argument for a blend of recency and model scores, which is also the plan for the LightGBM re-ranking stage. Any such experiment needs development on validation and the earlier folds, and evaluation on weeks not yet used, because the test week has now been used.
 
+**Update (Nov 14):** the re-ranker below was developed on the validation week only, but it was then evaluated on the same test week, because the data ends on 2020-09-22 and no unused week remains. Its test result is therefore not fully unseen: the test-week numbers above, which showed how strong the 7-day list is, were known when the candidate sources were chosen. See the caveats in the Re-ranking stage section.
+
 ## Why ALS for this block, and why LightGBM is the next stage
 
 The project plan budgeted this block for one model: matrix factorization (ALS) or a LightGBM learning-to-rank model, not both, on a schedule with no slack before the buffer week. ALS was chosen because it needs only the purchase matrix, handles the full 105,542-article catalog directly, and gives a clean per-segment story about where personalization does and does not help, which is the cold-start question this project is built around. A LightGBM ranker needs candidate generation, feature engineering and a training-set construction step before it can be evaluated honestly, and splitting two weeks across two under-evaluated models was the worse trade.
 
-The evaluation also argues for the ranker as the next step rather than more ALS tuning. A one-knob sensitivity sweep moved ALS by only a few percent, while a non-personalized 7-day popularity list beat both personalized models in four of five weeks with exclusion on, and failed in the one week when best sellers turned over. The two kinds of signal fail in different weeks, which is the situation where combining candidate sources (recent popularity, previously bought items, ALS scores) in a ranker that sees customer and article features has something to gain. That is a hypothesis, not a result: no blend or ranker has been built or evaluated yet.
+The evaluation also argues for the ranker as the next step rather than more ALS tuning. A one-knob sensitivity sweep moved ALS by only a few percent, while a non-personalized 7-day popularity list beat both personalized models in four of five weeks with exclusion on, and failed in the one week when best sellers turned over. The two kinds of signal fail in different weeks, which is the situation where combining candidate sources (recent popularity, previously bought items, ALS scores) in a ranker that sees customer and article features has something to gain. That was a hypothesis when this section was written; the Re-ranking stage section below tests it.
+
+## Re-ranking stage
+
+A second stage that scores a wider set of candidates per customer with a learning-to-rank model and keeps the top 12. It is evaluated offline only; the API still serves ALS.
+
+**Pipeline**
+
+- **Candidates** (`candidates.py`): ALS top-100, the 7-day popularity top-50, and every article the customer bought in the last 28 days, about 146 candidates per customer. On the test week, 29.4% of customers have at least one article they bought among their candidates (pair recall 12.9%); ALS top-100 alone covers 13.7%. Candidate recall caps what any ranker can reach.
+- **Features** (`features.py`): 12 features: ALS score and rank, which source produced the candidate (ALS, popularity, recent purchase), the article's purchase count over 7 and 28 days, its mean price over 28 days, the customer's purchase count of that article and days since they last bought it, and the customer's total purchases and days since their last purchase. `test_features.py` (7 unit tests) includes a check that `build_features` refuses any history row on or after the cutoff.
+- **Ranker** (`train_ranker.py`): LightGBM with the LambdaRank objective, monitored on MAP@12, fixed seed, deterministic. For validation it trains on the week before validation (2020-09-02 to 09-08) and is scored on the validation week; for the test run it trains on the validation week.
+- **Cold start:** customers with no purchase history are given the 7-day popularity list instead of the ranker's output ("ranker+cold"), because the ranker is worse for them (below).
+- **Baselines**, all scored on the same customers: served ALS, the 7-day popularity list, and, in `repurchase` mode, a rule that recommends the customer's own purchases from the last 28 days, most recent first, and fills the rest with the 7-day list ("repurchase+pop").
+
+**Settings were chosen on validation only.** Four settings were compared (ranker+cold MAP@12, discover / repurchase): 63 leaves 0.008315 / 0.030367; 15 leaves 0.008684 / 0.030980; 127 leaves 0.007911 / 0.029609; 600 rounds at learning rate 0.03 0.008248 / 0.030671. 15 leaves was chosen. The test week was then scored once per mode with that setting, and nothing was changed afterwards. `train_ranker.py` refuses the test week without `--final`.
+
+**Results, MAP@12, all target-week customers** (`*` = 95% paired-bootstrap interval excludes zero)
+
+| Week | Mode | ALS (served) | 7-day popular | repurchase+pop | ranker+cold |
+|---|---|---|---|---|---|
+| validation (settings chosen here) | repurchase | 0.0094 | 0.0066 | 0.0250 | 0.0310 |
+| validation (settings chosen here) | discover | 0.0051 | 0.0060 | n/a | 0.0087 |
+| test (68,984 customers) | repurchase | 0.0088 | 0.0087 | 0.0269 | **0.0313** (+16.2% vs repurchase+pop *) |
+| test (68,984 customers) | discover | 0.0050 | 0.0084 | n/a | **0.0088** (+4.9% vs 7-day, not significant) |
+
+Test week by segment (ranker alone, before cold-start routing):
+
+| Mode | Comparison | 0 purchases (5,572) | 1-2 purchases (2,061) | 3+ purchases (61,351) |
+|---|---|---|---|---|
+| repurchase | ranker vs repurchase+pop | -50.6% * | +6.1% | +17.0% * |
+| discover | ranker vs 7-day popular | -33.0% * | +5.6% | +5.3% |
+
+**What this shows**
+
+- **Most of the gain over served ALS comes from a simple rule.** On the test week the repurchase+pop rule alone scores 3.1 times served ALS. The ranker adds 16% on top of the rule (interval +0.0037 to +0.0050), and the gain comes from customers with 3 or more purchases; for 1-2 purchases it is +6% with an interval that crosses zero.
+- **The ranker leans on recency, not on ALS.** In `repurchase` mode the largest shares of gain are days since the customer last bought the article (0.32), the article's 7-day purchase count (0.27) and days since the customer's last purchase (0.12); ALS rank and score together are about 0.07. The three source flags carry almost none, since the other features already say where a candidate came from.
+- **In `discover` mode the validation lead did not hold.** On validation, ranker+cold led the 7-day list by 44%. On the test week it ties it (+4.9%, interval -0.0001 to +0.0009). The ranker's own score barely moved (0.0087 to 0.0088) and ALS was flat (0.0051 to 0.0050), but the 7-day list scored 39% higher on the test week, the same late rise in the recency baseline described in the backtest section. The ranker still beats served ALS by 71% (*) in that mode. The tie is reported as measured; no setting was changed after seeing it.
+- **Cold-start routing is required.** For customers with no history the ranker alone scores 33% to 51% below the 7-day list, because most of its features are empty for them. Routing them to the 7-day list recovers that segment exactly.
+
+**Caveats**
+
+- One test week. The `discover` result changed between two weeks, so the `repurchase` gain should not be assumed to hold every week either; scoring the ranker on the earlier backtest weeks would show how much it moves.
+- The test week had been scored before (for the ALS comparison), and what it showed about the 7-day list was known when the candidate sources were chosen; see the update at the end of the model comparison.
+- Four settings were tried on one validation week, and the validation numbers are from that week, so they are optimistic.
+- The bootstrap intervals cover customer-sampling noise within one week only.
+
+**Reproducing (test week, run once):**
+
+```
+python candidates.py --week test --pop-k 50 --recent-days 28 --save
+python features.py --week test
+python train_ranker.py --train-week val --eval-week test --final --num-leaves 15 --mode repurchase --label test-final
+python train_ranker.py --train-week val --eval-week test --final --num-leaves 15 --mode discover --label test-final
+```
+
+Results append to `reranker_test_results.csv`; validation runs append to `reranker_validation_results.csv`, and candidate recall to `candidate_recall_results.csv`.
 
 ## Model artifact
 
@@ -239,7 +296,7 @@ The evaluation also argues for the ranker as the next step rather than more ALS 
 
 The API does not score customers at request time. The saved factors are an 885 MB NumPy file that a Spring Boot service cannot read, and scoring 105,542 articles per request would buy nothing, so `export_recommendations.py` scores every customer in the artifact once and writes two top-12 lists per customer. The service looks them up by primary key in PostgreSQL; an optional Redis cache can sit in front of it, and it is off by default (key `rec:{mode}:{customerId}`, 1-hour TTL, unknown ids are never cached, and any Redis failure falls through to PostgreSQL after a 100 ms client timeout; `recs.list-cache-enabled=true` turns it on, and the A/B row below is why it is off by default). The one list that every unknown customer shares, the fallback list, is cached in the application's memory for 60 seconds (`recs.fallback-cache-ttl`), so unknown-id requests no longer query the database for it. An empty result is never cached, and per-customer lookups are never cached in process. The design and its open decisions are in [`serving-design-draft.md`](serving-design-draft.md).
 
-**Two modes.** `repurchase` (the default) allows articles the customer already bought; `discover` removes them. The default follows the evaluation. Against the 7-day popularity list, ALS leads on MAP@12 in all five evaluation weeks when already-bought items are allowed (significant in four; +0.6% and not significant on the test week), but its hit rate@12 is lower than the popularity list's in four of the five weeks. With already-bought items removed, ALS trails the popularity list on both metrics in four of five weeks, so `discover` stays available but is not the default, and its documentation says so. No model in this project beats the 7-day popularity list on both metrics in either mode.
+**Two modes.** `repurchase` (the default) allows articles the customer already bought; `discover` removes them. The default follows the evaluation. Against the 7-day popularity list, ALS leads on MAP@12 in all five evaluation weeks when already-bought items are allowed (significant in four; +0.6% and not significant on the test week), but its hit rate@12 is lower than the popularity list's in four of the five weeks. With already-bought items removed, ALS trails the popularity list on both metrics in four of five weeks, so `discover` stays available but is not the default, and its documentation says so. The served ALS lists do not beat the 7-day popularity list on both metrics in either mode. The offline re-ranker does in `repurchase` mode on the test week (see Re-ranking stage), but it is not served.
 
 **Cold start is part of the response contract.** A known customer gets their precomputed list. A well-formed id that is not in the table gets HTTP 200 with the 7-day popularity list and `source: fallback_popularity_7d`. A malformed id (anything other than 64 lowercase hex characters, so ids with spaces or uppercase letters are rejected rather than normalized) or an unknown `mode` gets 400, and a missing `mode` means `repurchase`. If the fallback table is empty, which is a server fault and not a user error, the endpoint returns 503 instead of an empty list. A new user never gets a 404 or 500 from the lookup path. On fallback responses, `modelVersion` records the model run that produced the batch, not the method behind the list; `source` says which method produced it. About 15,300 registered customers (no purchases before the history ended on 2020-09-15) have no embedding and take the fallback path. About 1,660 articles with no purchases in the history window can never be recommended; that is item cold start and is not addressed here.
 
@@ -312,5 +369,9 @@ Run from the repo root with the processed data in `data/processed/` (output of `
 | `python serving/latency_baseline.py` | measures endpoint latency (median, p95, p99) over repeated runs with a fixed method and saves the raw numbers to `serving/latency_results/`; `--workload zipf`, `--concurrency N` and `--label` select the variant |
 | `python refresh_fallback.py --as-of YYYY-MM-DD` | computes the 7-day popularity list for that day and writes it to `fallback_lists` in the running PostgreSQL container (`--dry-run` only prints it and the checks); needs the containers up |
 | `python -m unittest test_refresh_fallback` | the nine tests for the refresh job; the parity test loads the parquet files and takes about 30 seconds |
+| `python candidates.py --week {train,val,test} --pop-k 50 --recent-days 28 --save` | re-ranker candidates (ALS, 7-day popularity, recent purchases) and their recall; writes `data/candidates/` (test week about 6 minutes, mostly the ALS fit) |
+| `python features.py --week {train,val,test}` | the 12 ranker features for that week's candidates; writes `data/features/` |
+| `python train_ranker.py --mode {repurchase,discover} --num-leaves 15` | trains on the train week, scores the validation week against ALS, the 7-day list and the repurchase rule, with bootstrap intervals; `--train-week val --eval-week test --final` for the one test run |
+| `python -m unittest test_features` | the seven feature tests, including the leakage guard |
 
 Several scripts reproduce a prior table as a self-check and print CHECK PASSED or CHECK FAILED; a failed check means the pipeline differs from the one that produced the reported numbers.
