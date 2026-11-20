@@ -1,0 +1,7 @@
+# Keep the build context small and free of local build output and editor files.
+target/
+*.log
+.idea/
+.vscode/
+*.iml
+HELP.md

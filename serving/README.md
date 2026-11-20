@@ -43,9 +43,24 @@ cd ..
 powershell -NoProfile -ExecutionPolicy Bypass -File .\serving\run-api.ps1
 ```
 
-`run-api.ps1` reads `serving/.env`, puts `POSTGRES_PASSWORD` into the environment without printing it, and starts the app, which reads the password from that variable. Start the API this way. A bare `mvnw spring-boot:run` has no password, and the health check then reports the database as DOWN. To check a running app: `curl.exe -s http://localhost:8081/actuator/health`. With the default configuration it returns `UP` with a `db` component and no `redis` component.
+`run-api.ps1` reads `serving/.env`, puts `POSTGRES_PASSWORD` into the environment without printing it, and starts the app, which reads the password from that variable. Start the API this way. A bare `mvnw spring-boot:run` has no password, and the health check then reports the database as DOWN. To check a running app: `curl.exe -s http://127.0.0.1:8081/actuator/health`. With the default configuration it returns `UP` with a `db` component and no `redis` component.
 
 Two cautions. `load.sql` replaces the contents of both tables, so re-running it also deletes any fallback rows added by the refresh job (the original 2020-09-15 row comes back from the export). And `docker compose down -v` wipes the database, while plain `docker compose down` keeps it.
+
+### Or run the API in Docker
+
+`serving/api/Dockerfile` builds the API in two stages: the jar is built with the Maven wrapper on a Java 21 JDK, then a Java 21 runtime image runs it as a non-root user. Compose runs it behind the `app` profile, so plain `docker compose up -d` still starts only PostgreSQL and Redis, for use with `run-api.ps1`. With the tables loaded as above:
+
+```
+cd serving
+docker compose --profile app up -d --build    # the first build downloads the Maven dependencies (several minutes)
+docker compose logs api --tail 20             # look for "Started RecsApiApplication"
+docker compose --profile app down             # stops everything and keeps the database (never add -v)
+```
+
+The container reads `POSTGRES_PASSWORD` from `serving/.env` like the other services, reaches PostgreSQL and Redis by their service names, and publishes port 8081 on 127.0.0.1 only. Send requests to `127.0.0.1`, not `localhost`: on November 20 requests to `localhost` failed against the container while `127.0.0.1` worked, most likely because Windows resolved `localhost` to the IPv6 address first, which the container does not listen on. The scripts and the Postman collection default to `127.0.0.1`. Other notes: the image build skips the tests (the 33 tests run in GitHub Actions); the password is passed to the container as an environment variable, so `docker inspect` shows it, which is acceptable for a local demo but not for a shared machine; and the container cannot run alongside `run-api.ps1`, because both use port 8081.
+
+Checked on November 20, 2026: the container started in about 5 seconds and connected to PostgreSQL, and `parity_check_api.py --base-url http://127.0.0.1:8081` passed all 624 checks with 0 failures against it.
 
 ### From a fresh clone
 

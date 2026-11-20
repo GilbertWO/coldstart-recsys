@@ -42,5 +42,28 @@ services:
       timeout: 3s
       retries: 10
 
+  # The API itself, built from serving/api/Dockerfile. It is behind the "app" profile, so the usual
+  # `docker compose up -d` still starts only PostgreSQL and Redis (for running the API with run-api.ps1).
+  # Build and start everything:  docker compose --profile app up -d --build
+  # Do not run it alongside run-api.ps1: both use port 8081.
+  api:
+    profiles: ["app"]
+    build: ./api
+    image: coldstart-recs-api:local
+    container_name: coldstart-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-coldstart}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-coldstart}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in serving/.env (copy .env.example)}
+      SPRING_DATA_REDIS_HOST: redis
+      RECS_LIST_CACHE_ENABLED: ${RECS_LIST_CACHE_ENABLED:-false}
+    ports:
+      - "127.0.0.1:8081:8081"
+
 volumes:
   pgdata:

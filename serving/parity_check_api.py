@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Parity check: does the live endpoint return exactly what the offline export wrote?
 
-Run from the repo root with the API running (default http://localhost:8081):
+Run from the repo root with the API running (default http://127.0.0.1:8081):
 
     python serving/parity_check_api.py
     python serving/parity_check_api.py --samples 2000 --seed 7
@@ -86,7 +86,7 @@ def check_server(base):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--base-url", default="http://localhost:8081")
+    ap.add_argument("--base-url", default="http://127.0.0.1:8081")
     ap.add_argument("--export-dir", type=Path, default=DEFAULT_EXPORT_DIR)
     ap.add_argument("--samples", type=int, default=600, help="rows sampled from recommendations.csv")
     ap.add_argument("--unknown", type=int, default=20, help="random not-in-table ids to check")

@@ -341,7 +341,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\serving\run-api.ps1
 cd serving/api
 ./mvnw spring-boot:run        # listens on port 8081
 ./mvnw spring-boot:run "-Dspring-boot.run.arguments=--recs.list-cache-enabled=true"   # same, with the Redis list cache turned on
-curl "http://localhost:8081/v1/recommendations/<customer_id>?mode=repurchase"
+curl "http://127.0.0.1:8081/v1/recommendations/<customer_id>?mode=repurchase"
 ./mvnw test "-Dtest=DefaultRecommendationServiceTest,RecommendationControllerContractTest"
 ```
 
